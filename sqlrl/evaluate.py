@@ -26,6 +26,7 @@ def main():
     ap.add_argument("--heldout-questions", type=int, default=4)
     ap.add_argument("--temp", type=float, default=1.0)
     ap.add_argument("--max-turns", type=int, default=5)
+    ap.add_argument("--max-tokens", type=int, default=256, help="generated tokens per assistant turn")
     ap.add_argument("--hide-schema", action="store_true")
     ap.add_argument("--out", default=None, help="jsonl file for transcripts")
     ap.add_argument("--gen-batch", type=int, default=64)
@@ -39,7 +40,7 @@ def main():
     model.eval()
 
     eps, stats = rollout(model, tok, env.eval_tasks(args.per_template, args.k, sets=tuple(args.sets.split(",")),
-                                                  heldout_questions=args.heldout_questions), temp=args.temp, max_turns=args.max_turns,
+                                                  heldout_questions=args.heldout_questions), temp=args.temp, max_turns=args.max_turns, max_tokens=args.max_tokens,
                          show_schema=not args.hide_schema, batch_size=args.gen_batch, verbose=True)
 
     by_template = defaultdict(list)
