@@ -115,7 +115,7 @@ def test_proposers_rotate_and_one_failure_keeps_the_rest(tmp_path, monkeypatch):
     monkeypatch.setattr(evolve, 'DB', tmp_path / 'templates.db')
     calls = []
 
-    def propose(client, model, skill, n, hard=False, failing=None):
+    def propose(client, model, skill, n, hard=False, failing=None, combo=None):
         calls.append((model, skill, hard))
         if model == 'broken':
             raise RuntimeError('gateway error')
@@ -144,3 +144,22 @@ def test_stepping_stone_prompt_names_the_failing_question(monkeypatch):
     monkeypatch.setattr(evolve, 'value_lists', lambda: '')
     evolve.propose(None, 'm', 'having', 2, failing=('hard_one', 'Which X?', 'SELECT x FROM t'))
     assert 'It keeps failing this question type' in seen[0] and 'SELECT x FROM t' in seen[0]
+
+
+def test_reviewer_rejection_blocks_a_valid_template(monkeypatch):
+    teacher = SimpleNamespace(solve=lambda task: {'correct': True}, spent=0.0)
+    monkeypatch.setattr(evolve, 'complete', lambda client, model, prompt, max_tokens=4096:
+                        ('{"verdict": "reject", "reason": "ambiguous city"}', 0.002))
+    ok, why = evolve.validate(spec(), teacher, set(), reviewer=(None, 'rev'))
+    assert not ok and 'reviewer rev rejected: ambiguous city' in why and teacher.spent == 0.002
+    monkeypatch.setattr(evolve, 'complete', lambda client, model, prompt, max_tokens=4096:
+                        ('{"verdict": "approve", "reason": "fine"}', 0.0))
+    ok, why = evolve.validate(spec(), teacher, set(), reviewer=(None, 'rev'))
+    assert ok and 'rev approved' in why
+
+
+def test_uncovered_combinations_skip_existing_pairs():
+    import env
+    combos = evolve.uncovered_combinations(1000)
+    have = [set(env.SKILLS[t]) for t in env.TEMPLATES if t not in env.HELDOUT_TEMPLATES]
+    assert combos and not any(set(c) <= h for c in combos for h in have)

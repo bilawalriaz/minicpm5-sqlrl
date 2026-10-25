@@ -133,6 +133,28 @@ Reply with JSON only:
 "question": "...", "sql": "...", "params": {{"placeholder": [...]}}}}]}}
 Allowed skills: {skills}"""
 
+REVIEW = """You review a training question for a small text-to-SQL model. A wrong or ambiguous question \
+teaches the model a wrong habit, so reject anything doubtful.
+
+Database schema:
+{schema}
+
+Question: {question}
+Reference SQL: {sql}
+First rows of the reference result ({count} rows): {rows}
+
+Approve only if all hold:
+1. The question has exactly one reasonable reading, and the SQL computes that reading: the right filters, \
+joins, grouping and aggregation, with nothing extra.
+2. The question names the columns to return and the SQL returns exactly those, in that order.
+3. Any rounding, "return 0 if none", or tie-breaking the SQL needs is stated in the question.
+4. The wording is natural English a user might write.
+
+Reply with JSON only: {{"verdict": "approve" | "reject", "reason": "<one sentence>"}}"""
+
+COMBO = """
+- Each template must use all of these skills together: {combo}."""
+
 # Burst prompts ask for harder compositions when training groups stop carrying signal.
 HARD = """- Make each question harder than the existing templates: tier 3, combining the target skill with at \
 least two other listed skills, and needing a subquery or a derived table. Keep exactly one correct answer."""
@@ -158,7 +180,17 @@ def complete(client, model, prompt, max_tokens=8192):
     return resp.choices[0].message.content or "", cost_of(resp)
 
 
-def propose(client, model, skill, n, hard=False, failing=None):
+def review(client, model, spec, question, sql, con):
+    """Returns (approved, reason, dollars) from a reviewer model that sees the reference SQL."""
+    rows = env.execute(con, sql)[0]
+    text, cost = complete(client, model, REVIEW.format(schema=env.SCHEMA, question=question, sql=sql,
+                                                       count=len(rows), rows=rows[:5]), max_tokens=1024)
+    start = text.find("{")
+    verdict = json.JSONDecoder().raw_decode(text, start)[0] if start >= 0 else {}
+    return verdict.get("verdict") == "approve", str(verdict.get("reason", "no verdict"))[:200], cost
+
+
+def propose(client, model, skill, n, hard=False, failing=None, combo=None):
     """failing: (name, question, sql) of a template the student keeps failing; the proposals
     are then stepping stones toward it, targeting its first skill."""
     if failing:
@@ -167,7 +199,8 @@ def propose(client, model, skill, n, hard=False, failing=None):
     else:
         prompt = PROMPT.format(
             schema=env.SCHEMA, values=value_lists(), skill=skill, description=env.SKILL_DESCRIPTIONS[skill],
-            examples=examples(skill), n=n, skills=sorted(env.SKILL_DESCRIPTIONS), difficulty=HARD if hard else "",
+            examples=examples(skill), n=n, skills=sorted(env.SKILL_DESCRIPTIONS),
+            difficulty=(HARD if hard else "") + (COMBO.format(combo=", ".join(combo)) if combo else ""),
         )
     text, cost = complete(client, model, prompt)
     start = text.find("{")
@@ -300,8 +333,9 @@ def normalise(sql):
     return re.sub(r"\s+", " ", sql.strip().rstrip(";")).lower()
 
 
-def validate(spec, teacher, known_sql):
-    """Returns (accepted, reason)."""
+def validate(spec, teacher, known_sql, reviewer=None):
+    """Returns (accepted, reason). reviewer: optional (client, model) that must approve a
+    sample question after the data checks and the solver pass."""
     if reason := check_structure(spec):
         return False, reason
     if normalise(spec["sql"]) in known_sql:
@@ -347,17 +381,27 @@ def validate(spec, teacher, known_sql):
         needed = min(2, len(selected))
         if solved < needed:
             return False, f"fresh solver got {solved}/{len(selected)} distinct questions right"
-        return True, f"all {combinations} combinations execute; solver got {solved}/{len(selected)}"
+        note = ""
+        if reviewer:
+            approved, why, cost = review(*reviewer, spec, *selected[0], cons[0])
+            teacher.spent += cost
+            if not approved:
+                return False, f"reviewer {reviewer[1]} rejected: {why}"
+            note = f"; {reviewer[1]} approved"
+        return True, f"all {combinations} combinations execute; solver got {solved}/{len(selected)}{note}"
     finally:
         for con in cons:
             con.close()
 
 
-def evolve(skills, n, model="glm-5.3-flash", workers=4, solver="glm-5.3-flash", hard=False, failing=None):
+def evolve(skills, n, model="glm-5.3-flash", workers=4, solver="glm-5.3-flash", hard=False, failing=None,
+           reviewer=None, combos=None):
     """Propose n templates per skill, validate them, store every verdict. Returns accepted specs.
     model may be a comma-separated list; skills rotate through it. The solver that checks
     proposals should differ from the proposers, so acceptance is not one model agreeing with itself.
-    failing: optional list of (name, question, sql), one per skill, for stepping-stone proposals."""
+    failing: optional list of (name, question, sql), one per skill, for stepping-stone proposals.
+    reviewer: model that must approve each accepted template. combos: optional list of skill
+    tuples, one per skill, that each proposal must combine."""
     models = model.split(",")
     client, teacher = make_client(), Teacher(solver, workers=1)
     con = connect()
@@ -365,7 +409,8 @@ def evolve(skills, n, model="glm-5.3-flash", workers=4, solver="glm-5.3-flash", 
 
     def safe_propose(i, skill):
         try:
-            return propose(client, models[i % len(models)], skill, n, hard, failing[i] if failing else None)
+            return propose(client, models[i % len(models)], skill, n, hard, failing[i] if failing else None,
+                           combos[i] if combos else None)
         except Exception as exc:  # one model's API failure should not discard the others' proposals
             print(f"  evolve: {models[i % len(models)]} failed for {skill}: {type(exc).__name__}: {str(exc)[:120]}")
             return [], 0.0
@@ -373,7 +418,8 @@ def evolve(skills, n, model="glm-5.3-flash", workers=4, solver="glm-5.3-flash", 
     with ThreadPoolExecutor(workers) as pool:
         proposals = list(pool.map(safe_propose, range(len(skills)), skills))
         specs = [spec for batch, _ in proposals for spec in batch]
-        verdicts = list(pool.map(lambda spec: validate(spec, teacher, known_sql), specs))
+        verdicts = list(pool.map(lambda spec: validate(spec, teacher, known_sql,
+                                                       (client, reviewer) if reviewer else None), specs))
     accepted = []
     for spec, (ok, reason) in zip(specs, verdicts):
         if ok and (normalise(spec["sql"]) in known_sql or spec["name"] in {x["name"] for x in accepted}):
@@ -413,6 +459,18 @@ def revalidate():
     con.close()
 
 
+def uncovered_combinations(k, seed=None):
+    """Skill pairs and triples that no trainable template combines yet, pairs first."""
+    have = [set(env.SKILLS[t]) for t in env.TEMPLATES if t not in env.HELDOUT_TEMPLATES]
+    skills = sorted(env.SKILL_DESCRIPTIONS)
+    out = []
+    for size in (2, 3):
+        combos = [c for c in itertools.combinations(skills, size) if not any(set(c) <= h for h in have)]
+        random.Random(seed).shuffle(combos)
+        out += combos
+    return out[:k]
+
+
 def load_accepted():
     """Register every accepted template with env. Returns their names."""
     con = connect()
@@ -434,6 +492,9 @@ if __name__ == "__main__":
     ap.add_argument("--model", default="glm-5.3-flash", help="proposer, or a comma-separated list to rotate")
     ap.add_argument("--solver", default="glm-5.3-flash", help="model that must solve proposals without the reference")
     ap.add_argument("--hard", action="store_true", help="ask for tier-3 compositions with subqueries")
+    ap.add_argument("--reviewer", help="model that must approve each template, e.g. claude-haiku-5-5")
+    ap.add_argument("--coverage", type=int, default=0,
+                    help="instead of --skills, propose for this many skill pairs and triples not yet combined")
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--revalidate", action="store_true", help="recheck accepted templates against the current data checks")
     args = ap.parse_args()
@@ -444,11 +505,14 @@ if __name__ == "__main__":
                 "SELECT status, name, target_skill, reason, question FROM templates ORDER BY id"):
             print(f"{status:8s} {name} [{skill}] {reason}\n         {q}")
     else:
-        skills = sorted(env.SKILL_DESCRIPTIONS) if args.skills == "all" else args.skills.split(",")
         for _ in range(args.rounds):
             load_accepted()  # so names and examples include earlier generations
+            combos = uncovered_combinations(args.coverage) if args.coverage else None
+            skills = ([c[0] for c in combos] if combos else
+                      sorted(env.SKILL_DESCRIPTIONS) if args.skills == "all" else args.skills.split(","))
             t0 = time.time()
-            accepted, stats = evolve(skills, args.n, args.model, solver=args.solver, hard=args.hard)
+            accepted, stats = evolve(skills, args.n, args.model, solver=args.solver, hard=args.hard,
+                                     reviewer=args.reviewer, combos=combos)
             print(f"{stats['accepted']} of {stats['proposed']} accepted in {time.time() - t0:.0f}s, ${stats['spent']:.4f}")
             for spec in accepted:
                 print(f"  + {spec['name']} {spec['skills']}: {spec['question']}")
