@@ -25,7 +25,7 @@ I tested it with 21 plausible wrong rewrites of the reference queries, things li
 
 Regrading the archive from the first training run with the stricter checks rejected 376 of 2,266 answers that had been marked correct.
 
-## Measuring generalisation honestly
+## Measuring generalisation
 
 An early run looked great: evaluation went from 25% to 82.5%. Then I noticed that 23 of the 25 evaluation questions had appeared in training. That number measured memory, not ability.
 
