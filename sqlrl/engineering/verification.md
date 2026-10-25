@@ -268,3 +268,53 @@ change (15/16 to 0-1/16) is large. The monitor's collapse rule uses overall pass
 which stayed within 0.15 of the first evaluation, so it did not stop the run.
 `step_00160` has the best held-out score; it was selected on the same evaluation
 set, so that score is optimistic.
+
+# Follow-up: generalization, 25 October 2026 (eval-v3, sql-v2.3)
+
+## Changes
+
+- eval-v3: a selection set (5 never-trained templates; checkpoint choice and early
+  stopping) and a check set (5 other never-trained templates; scored only at the
+  start and on the final and selected checkpoints). Seven held-out templates are new.
+- sql-v2.3 raises the instruction budget to 50M; a correct correlated subquery over
+  unindexed order lines needs about 18M. 30 of 41,665 overnight submissions hit the
+  old budget; those inspected were wrong for other reasons.
+- Template bank: 124 validated generated templates before the long run. Proposers
+  rotate Claude Haiku 5.5 (gateway Messages endpoint), GLM-5.3 and GLM-5.3-flash; a
+  separate solver checks each proposal. A containment check rejects generated
+  answers that are part of, or contain, a held-out answer (it rejected
+  `count_orders_status_year`, one row of the held-out `status_counts_year`).
+
+## Clean comparison on the check set
+
+`check-set-overnight.txt` (18 questions x 8 attempts; never trained or used for
+selection): base model 0.132, overnight step 40 0.146, step 160 0.403, final 0.389.
+
+## Short validation runs (all resumed or warm-started from overnight step 160)
+
+| Run | Change | Selection, start then later | Reserved params | Sampled-token NLL |
+| --- | --- | --- | --- | --- |
+| v23_short | base model, full bank | 0.053 -> 0.092 (step 4) | 0.06 -> 0.19 | n/a |
+| v23_short_warm | fresh optimizer, 0.01 replay weight | 0.38 -> 0.22 (step 8) | 1.00 -> 0.58 | n/a |
+| v23_replay_check | + 25% replay of mastered templates | 0.36 -> 0.33 (step 8) | 0.98 -> 0.56 | n/a |
+| v23_resume_check | restored optimizer state | 0.37 -> 0.33 (step 172) | 0.98 -> 0.63 | 0.05 -> 0.55 |
+| v23_fix_check | wrong answers never positive | 0.35 -> 0.22 (step 168) | 0.98 -> 0.67 | 0.03 -> 0.12 |
+| v23_noteacher_check | teacher off | 0.35 -> 0.41 -> 0.18 (176) | 0.98 -> 0.94 | flat 0.03-0.06 |
+| v23_ema_check | near-policy teacher x0.5, EMA 0.9, lr 1.5e-5 | 0.375 -> 0.421 (172), 0.408 (180) | 0.98 -> 0.98-1.00 | flat 0.04-0.08 |
+
+Findings, in order: mastered templates need a fixed replay share; a fresh Adam state
+on a trained adapter makes large noisy updates; in groups with no correct answer,
+wrong SQL ranked above unanswered attempts was reinforced (3-21 per step); teacher
+solutions far from the student's distribution corrupted existing skills (invented
+tables and joins); small batches over a varied pool make the policy switch SQL
+styles between steps (held-out 0.41 -> 0.18 in 4 steps without averaging).
+
+v23_ema_check check set: 0.396 at step 160, 0.590 final (step 180), 0.569 on the
+selected step 176. Teacher solutions offered had 0.23-1.7 NLL per token; the 1.0
+filter kept about 80%.
+
+## Long run
+
+final_v23 resumes v23_ema_check/final with 32 prompts x 8, generation batch 128,
+lr 1.5e-5 decaying to 5e-6, evaluation every 10 steps, patience 6, 8-hour bound,
+near-policy teacher, EMA 0.9, replay 0.25, stepping stones and bursts.
