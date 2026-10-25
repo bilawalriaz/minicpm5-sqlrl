@@ -29,7 +29,7 @@ def main():
     ap.add_argument("--hide-schema", action="store_true")
     ap.add_argument("--out", default=None, help="jsonl file for transcripts")
     ap.add_argument("--gen-batch", type=int, default=64)
-    ap.add_argument("--mem-gb", type=float, default=26)
+    ap.add_argument("--mem-gb", type=float, default=30)
     args = ap.parse_args()
     set_memory_budget(args.mem_gb)
 

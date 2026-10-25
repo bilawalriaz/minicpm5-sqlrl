@@ -318,3 +318,17 @@ filter kept about 80%.
 final_v23 resumes v23_ema_check/final with 32 prompts x 8, generation batch 128,
 lr 1.5e-5 decaying to 5e-6, evaluation every 10 steps, patience 6, 8-hour bound,
 near-policy teacher, EMA 0.9, replay 0.25, stepping stones and bursts.
+
+## Test-set protocol (written before any test-set result)
+
+Ten templates (`env.HELDOUT_TEST`) were written during final_v23b, after the
+development decisions. final_v23b loaded its templates at launch, so it cannot sample
+them. They are scored once, after training, on the base model and on the
+checkpoint chosen by the selection set, with
+`python evaluate.py --sets test --k 16 --heldout-questions 4`.
+
+Exclusion rule, fixed now: after training, every accepted generated template is
+compared with each test question using `evolve.contained` on the training fixtures.
+A test template with any overlapping question is excluded from the headline number
+and listed separately. No other test template is dropped, and the test set is not
+used to choose a checkpoint or setting.

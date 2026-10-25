@@ -165,7 +165,7 @@ value at `--steps`. `sample_nll` in `metrics.jsonl` is the mean negative
 log-probability of sampled tokens; a sustained rise means the policy is getting
 noisier.
 
-The M3 Pro profile uses `--gen-batch 64 --micro-tokens 8192 --mem-gb 26`.
+The M3 Pro profile uses `--gen-batch 64 --micro-tokens 8192 --mem-gb 30` (`--prompts 32 --gen-batch 128` for long runs).
 `--gen-batch` controls parallel decoding. `--micro-tokens` controls padded tokens
 per gradient micro-batch. `--mem-gb` caps MLX memory; the wired limit also respects
 Apple's recommended working set. Measure batch sizes on the target machine with:
@@ -220,7 +220,7 @@ scripts/watchdog.sh <training-pid> runs/<name>.mem &
 python scripts/monitor.py --run <name> --pid <training-pid> &
 ```
 
-The watchdog sends SIGTERM after three checks in a row over 30 GiB footprint, over
+The watchdog sends SIGTERM after three checks in a row over its footprint limit (pass 33792 MB with `--mem-gb 30`), over
 3 GiB swap growth, or at critical memory pressure. The monitor writes
 `runs/<name>/monitor.jsonl` every minute and sends SIGTERM if a literal answer is
 graded correct, if evaluation falls 0.15 below both the first and best results

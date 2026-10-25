@@ -223,6 +223,8 @@ def test_builtin_answers_differ_between_fixtures():
         with ExitStack() as stack:
             connections = [stack.enter_context(closing(c)) for c in env.verifier_connections(db)]
             for name in env.BUILTIN:
+                if db == env.DB_PATH and name in env.HELDOUT_TEMPLATES:
+                    continue  # held-out templates are graded only on the evaluation databases
                 for question, gold in questions(name):
                     assert len({signature(env.execute(c, gold)[0]) for c in connections}) > 1, question
 

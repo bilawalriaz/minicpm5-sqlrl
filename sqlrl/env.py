@@ -266,6 +266,37 @@ TEMPLATES = {
     "first_order_city": (2, lambda r: (c := _city(r)) and (
         f"On what date was the earliest order placed by a customer living in {c}? Return the date.",
         f"SELECT MIN(o.order_date) FROM orders o JOIN customers c ON c.id = o.customer_id WHERE c.city = '{c}'")),
+    # Test set: written after all development decisions; scored once for the release report.
+    "avg_order_value_country": (3, lambda r: (k := r.choice(list(CITIES))) and (
+        f"What is the average order value (sum of quantity * unit_price over an order's lines) of shipped orders placed by customers from {k}? Round to 2 decimal places.",
+        f"SELECT ROUND(AVG(t.total), 2) FROM (SELECT o.id, SUM(oi.quantity * oi.unit_price) AS total FROM orders o JOIN order_items oi ON oi.order_id = o.id JOIN customers c ON c.id = o.customer_id WHERE o.status = 'shipped' AND c.country = '{k}' GROUP BY o.id) t")),
+    "customers_multi_category": (3, lambda r: (n := r.choice([3, 4, 5])) and (
+        f"How many customers have ordered products from at least {n} different categories?",
+        f"SELECT COUNT(*) FROM (SELECT o.customer_id FROM orders o JOIN order_items oi ON oi.order_id = o.id JOIN products p ON p.id = oi.product_id GROUP BY o.customer_id HAVING COUNT(DISTINCT p.category) >= {n})")),
+    "never_shipped_customers_city": (3, lambda r: (c := _city(r)) and (
+        f"How many customers living in {c} have placed at least one order but never had an order with status 'shipped'?",
+        f"SELECT COUNT(*) FROM customers c WHERE c.city = '{c}' AND EXISTS (SELECT 1 FROM orders o WHERE o.customer_id = c.id) AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.customer_id = c.id AND o.status = 'shipped')")),
+    "returned_share_category": (3, lambda r: (c := r.choice(CATEGORIES)) and (
+        f"What fraction of order lines (rows in order_items) for {c} products belong to orders with status 'returned'? Round to 3 decimal places.",
+        f"SELECT ROUND(1.0 * SUM(o.status = 'returned') / COUNT(*), 3) FROM order_items oi JOIN orders o ON o.id = oi.order_id JOIN products p ON p.id = oi.product_id WHERE p.category = '{c}'")),
+    "latest_signup_country": (1, lambda r: (k := r.choice(list(CITIES))) and (
+        f"What is the most recent signup date among customers from {k}? Return the date.",
+        f"SELECT MAX(signup_date) FROM customers WHERE country = '{k}'")),
+    "products_above_avg_category": (2, lambda r: (c := r.choice(CATEGORIES)) and (
+        f"How many {c} products cost more than the average price of all products?",
+        f"SELECT COUNT(*) FROM products WHERE category = '{c}' AND price > (SELECT AVG(price) FROM products)")),
+    "busiest_month_year": (2, lambda r: (y := r.choice([2023, 2024, 2025])) and (
+        f"In {y}, which month had the most orders? Return only the month as a two-digit string such as '07'.",
+        f"SELECT substr(order_date, 6, 2) FROM orders WHERE order_date LIKE '{y}-%' GROUP BY substr(order_date, 6, 2) ORDER BY COUNT(*) DESC LIMIT 1")),
+    "distinct_products_city": (2, lambda r: (c := _city(r)) and (
+        f"How many distinct products have been ordered by customers living in {c}?",
+        f"SELECT COUNT(DISTINCT oi.product_id) FROM order_items oi JOIN orders o ON o.id = oi.order_id JOIN customers c ON c.id = o.customer_id WHERE c.city = '{c}'")),
+    "customers_spent_over": (3, lambda r: (x := r.choice([2000, 4000, 6000])) and (
+        f"How many customers spent more than {x} in total (sum of quantity * unit_price) on shipped orders?",
+        f"SELECT COUNT(*) FROM (SELECT o.customer_id FROM orders o JOIN order_items oi ON oi.order_id = o.id WHERE o.status = 'shipped' GROUP BY o.customer_id HAVING SUM(oi.quantity * oi.unit_price) > {x})")),
+    "top_city_orders_country": (3, lambda r: (k := r.choice(list(CITIES))) and (
+        f"Which city in {k} has the most orders from its customers? Return only the city.",
+        f"SELECT c.city FROM orders o JOIN customers c ON c.id = o.customer_id WHERE c.country = '{k}' GROUP BY c.city ORDER BY COUNT(*) DESC LIMIT 1")),
 }
 
 
@@ -294,6 +325,16 @@ SKILLS = {
     "status_counts_year": ("group_by", "date_filter", "aggregate"),
     "large_orders": ("group_by", "having", "aggregate"),
     "first_order_city": ("join", "filter", "aggregate"),
+    "avg_order_value_country": ("multi_join", "group_by", "aggregate", "rounding"),
+    "customers_multi_category": ("multi_join", "group_by", "having", "distinct"),
+    "never_shipped_customers_city": ("anti_join", "filter", "aggregate"),
+    "returned_share_category": ("multi_join", "aggregate", "rounding"),
+    "latest_signup_country": ("filter", "aggregate"),
+    "products_above_avg_category": ("filter", "aggregate"),
+    "busiest_month_year": ("date_filter", "group_by", "top_k"),
+    "distinct_products_city": ("multi_join", "distinct", "aggregate"),
+    "customers_spent_over": ("join", "group_by", "having", "aggregate"),
+    "top_city_orders_country": ("join", "group_by", "top_k"),
 }
 SKILL_DESCRIPTIONS = {
     "filter": "WHERE conditions on one table",
@@ -341,7 +382,11 @@ EVAL_VERSION = "eval-v3"
 # selected and final checkpoints, so its score is not biased by selection.
 HELDOUT_SELECT = ("signups_year", "orders_by_country", "best_category_year", "lines_per_order_status", "repeat_buyers_cat")
 HELDOUT_CHECK = ("country_revenue_year", "idle_customers_country", "status_counts_year", "large_orders", "first_order_city")
-HELDOUT_TEMPLATES = HELDOUT_SELECT + HELDOUT_CHECK
+# Test set: added after the development decisions; scored once, on the base model and the final checkpoint.
+HELDOUT_TEST = ("avg_order_value_country", "customers_multi_category", "never_shipped_customers_city",
+                "returned_share_category", "latest_signup_country", "products_above_avg_category",
+                "busiest_month_year", "distinct_products_city", "customers_spent_over", "top_city_orders_country")
+HELDOUT_TEMPLATES = HELDOUT_SELECT + HELDOUT_CHECK + HELDOUT_TEST
 
 
 def _questions(name):
@@ -377,7 +422,7 @@ def eval_tasks(per_template, k, sets=("train", "select"), heldout_questions=4, h
     if per_template < 1 or k < 1 or heldout_questions < 1:
         raise ValueError("Evaluation counts must be positive")
     ensure_databases()
-    groups = {"select": HELDOUT_SELECT, "check": HELDOUT_CHECK}
+    groups = {"select": HELDOUT_SELECT, "check": HELDOUT_CHECK, "test": HELDOUT_TEST}
     tasks = []
     for name in BUILTIN:
         tier, _ = TEMPLATES[name]

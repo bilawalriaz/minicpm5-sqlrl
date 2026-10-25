@@ -415,7 +415,7 @@ def main():
     ap.add_argument("--hide-schema", action="store_true")
     ap.add_argument("--micro-tokens", type=int, default=8192, help="padded tokens per forward/backward pass")
     ap.add_argument("--gen-batch", type=int, default=64, help="sequences decoded in parallel")
-    ap.add_argument("--mem-gb", type=float, default=26, help="cap on MLX memory in GiB (this Mac has 36GB)")
+    ap.add_argument("--mem-gb", type=float, default=30, help="cap on MLX memory in GiB (this Mac has 36GB)")
     ap.add_argument("--max-grad-norm", type=float, default=1.0)
     ap.add_argument("--eval-every", type=int, default=25, help="0 disables")
     ap.add_argument("--eval-per-template", type=int, default=2)
