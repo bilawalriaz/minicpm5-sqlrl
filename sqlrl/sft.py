@@ -86,7 +86,10 @@ def replay_examples(tok, runs, limit, seed):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--name", required=True)
-    ap.add_argument("--resume", required=True, help="checkpoint to start from (adapters, optimizer, curriculum)")
+    ap.add_argument("--resume", help="checkpoint to start from (adapters, optimizer, curriculum); omit for a fresh adapter")
+    ap.add_argument("--rank", type=int, default=32)
+    ap.add_argument("--scale", type=float, default=2.0)
+    ap.add_argument("--lora-layers", type=int, default=24)
     ap.add_argument("--model", default=str(HERE.parent / "models/MiniCPM5-1B"))
     ap.add_argument("--solutions", nargs="+", default=[str(env.DATA_DIR / "solutions.jsonl")])
     ap.add_argument("--replay", nargs="*", default=[], help="run directories (under runs/) to replay correct transcripts from")
@@ -108,18 +111,26 @@ def main():
     set_memory_budget(args.mem_gb)
     env.ensure_databases()
     evolve.load_accepted()
-    state = json.loads((Path(args.resume) / "trainer_state.json").read_text())
-    config = json.loads((Path(args.resume) / "adapter_config.json").read_text())
     model, tok = load(args.model)
     model.freeze()
-    model = load_adapters(model, args.resume)
-    evaluated = dict(train.tree_flatten(model.trainable_parameters()))
-    if (Path(args.resume) / "raw_adapters.safetensors").exists():
-        model.load_weights(str(Path(args.resume) / "raw_adapters.safetensors"), strict=False)
+    if args.resume:
+        state = json.loads((Path(args.resume) / "trainer_state.json").read_text())
+        config = json.loads((Path(args.resume) / "adapter_config.json").read_text())
+        model = load_adapters(model, args.resume)
+        evaluated = dict(train.tree_flatten(model.trainable_parameters()))
+        if (Path(args.resume) / "raw_adapters.safetensors").exists():
+            model.load_weights(str(Path(args.resume) / "raw_adapters.safetensors"), strict=False)
+    else:
+        lora = {"rank": args.rank, "scale": args.scale, "dropout": 0.0}
+        train.linear_to_lora_layers(model, args.lora_layers, lora)
+        state = {"step": 0, "curriculum": {"rate": {}, "seen": {}}}
+        config = {"num_layers": args.lora_layers, "lora_parameters": lora}
+        evaluated = None
     model.eval()
     average = train.WeightAverage(model, args.ema_decay, evaluated)
     opt = optim.Adam(learning_rate=args.lr)
-    train.load_optimizer(opt, model, Path(args.resume), args.lr)
+    if args.resume:
+        train.load_optimizer(opt, model, Path(args.resume), args.lr)
     eval_args = SimpleNamespace(eval_per_template=2, eval_k=4, eval_heldout_questions=4, eval_heldout_k=8,
                                 temp=1.0, max_turns=5, max_tokens=args.max_tokens, hide_schema=False, gen_batch=128)
     log.write("config.json", {**vars(args), "started": time.time(), "kind": "sft", "start_step": state["step"],
