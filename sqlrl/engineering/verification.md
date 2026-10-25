@@ -235,3 +235,36 @@ Training reward rose from -0.091 to 0.789. Missing submissions fell from 64 to 0
 step 3. Peak MLX memory 7.3 GiB. The first evolution cycle accepted 1 of 4
 templates (`avg_spend_by_city_on_category`); the rejections were an empty
 primary answer (twice) and more than 256 parameter combinations.
+
+### Outcome
+
+The run completed all 300 steps in 5.33 hours (`stop_reason: completed`), faster
+than the eight-hour bound because episodes became two-turn. Checkpoints
+`step_00010` to `step_00300` and `final/` are saved. The monitor recorded no alerts
+and no stop; the watchdog never hit a limit; no update was skipped; no literal answer
+was graded correct. Peak MLX memory was 9.7 GiB. Teacher cost was $0.059 and
+evolution $0.007; evolution accepted 7 templates in 30 cycles.
+
+| Steps | Mean reward | Groups with signal (of 16) | Teacher rescues | Seconds per step |
+| --- | --- | --- | --- | --- |
+| 1-50 | 0.679 | 9.8 | 90 | 110 |
+| 51-100 | 0.956 | 3.1 | 3 | 57 |
+| 101-200 | 0.931 | 3.5 | 19 | 60 |
+| 201-300 | 0.991 | 1.1 | 0 | 40 |
+
+Evaluation (29 questions x 4): pass@1 0.129 at step 0, 0.810 at step 40, highest
+0.871 at step 160, 0.767 at step 300. Reserved parameters reached 0.94 by step 30
+and 1.00 at most later evaluations. Held-out templates rose to 0.682 at step 160,
+then varied between 0.045 (step 240) and 0.523; 0.386 at step 300. By template at
+steps 160 / 240 / 300: signups_year 15/16, 0/16, 1/16; orders_by_country 15/16,
+2/16, 16/16; best_category_year 0/12 at all three. Late signups_year failures join
+orders or filter on order dates, the pattern of trained templates.
+
+Interpretation: the training pool was saturated by about step 60. After that, few
+groups carried gradient and in-distribution scores stayed near 1.0 while transfer
+to held-out templates fell and became unstable. Each held-out estimate uses 44
+attempts on 11 questions, so single evaluations are noisy, but the signups_year
+change (15/16 to 0-1/16) is large. The monitor's collapse rule uses overall pass@1,
+which stayed within 0.15 of the first evaluation, so it did not stop the run.
+`step_00160` has the best held-out score; it was selected on the same evaluation
+set, so that score is optimistic.
