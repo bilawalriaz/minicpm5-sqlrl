@@ -115,7 +115,7 @@ def test_proposers_rotate_and_one_failure_keeps_the_rest(tmp_path, monkeypatch):
     monkeypatch.setattr(evolve, 'DB', tmp_path / 'templates.db')
     calls = []
 
-    def propose(client, model, skill, n, hard=False):
+    def propose(client, model, skill, n, hard=False, failing=None):
         calls.append((model, skill, hard))
         if model == 'broken':
             raise RuntimeError('gateway error')
@@ -132,6 +132,15 @@ def test_proposers_rotate_and_one_failure_keeps_the_rest(tmp_path, monkeypatch):
 def test_proposal_parsing_ignores_fences_and_trailing_text(monkeypatch):
     reply = 'Here you go:\n```json\n{"templates": [{"name": "x_y"}]}\n```\nNotes: {not json}'
     monkeypatch.setattr(evolve, 'complete', lambda client, model, prompt: (reply, 0.01))
+    prompts = []
     monkeypatch.setattr(evolve, 'value_lists', lambda: '')
     specs, cost = evolve.propose(None, 'm', 'filter', 1)
     assert specs == [{'name': 'x_y', 'target_skill': 'filter', 'model': 'm'}] and cost == 0.01
+
+
+def test_stepping_stone_prompt_names_the_failing_question(monkeypatch):
+    seen = []
+    monkeypatch.setattr(evolve, 'complete', lambda client, model, prompt: seen.append(prompt) or ('{"templates": []}', 0.0))
+    monkeypatch.setattr(evolve, 'value_lists', lambda: '')
+    evolve.propose(None, 'm', 'having', 2, failing=('hard_one', 'Which X?', 'SELECT x FROM t'))
+    assert 'It keeps failing this question type' in seen[0] and 'SELECT x FROM t' in seen[0]

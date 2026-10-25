@@ -41,3 +41,12 @@ def test_replay_weights_cover_only_mastered_templates():
     assert replay["count_city"] == 1.0 and replay["churned"] == 0.0
     tasks = env.sample_tasks(8, seed=1, weights=replay)
     assert {t.template for t in tasks} == {"count_city"}
+
+
+def test_failing_templates_need_evidence():
+    c = Curriculum(alpha=1.0)
+    c.update(episodes("churned", 0, n=8))
+    assert c.failing(2) == []
+    c.update(episodes("churned", 0, n=16))
+    c.update(episodes("count_city", 40))
+    assert c.failing(2) == ["churned"]

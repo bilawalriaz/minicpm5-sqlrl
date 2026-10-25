@@ -47,10 +47,18 @@ runs every ten steps; use `--evolve-every 0` to disable it.
 - Malformed, multiple, or unknown function calls receive a tool error. The model
   can recover on a later turn.
 
+Advantages are rewards minus the group mean, with two limits. In a group where no
+student answered correctly, students get no gradient. In other groups, an answer
+that is not correct never gets a positive advantage. Without these limits, wrong SQL
+outranked unanswered attempts and was reinforced.
+
 The teacher uses the same tools, schema visibility, and turn budget. Verified
 teacher actions are converted to the student's token format. Actions longer than
 the student's token limit are excluded. Teacher injection supplies a supervised
-positive gradient; it is not an on-policy sample from the student.
+positive gradient; it is not an on-policy sample from the student. It helped the
+base model learn the protocol, but with a large bank of hard templates it degraded
+skills the model already had, so later runs leave `--teacher` off (see
+`engineering/verification.md`).
 
 ## Verifier and data
 
@@ -130,9 +138,18 @@ python evolve.py --skills all --n 4 --rounds 3
 
 During training, generation runs every `--evolve-every` steps for
 `--evolve-skills` skills: skills solved less than 60% of the time first, otherwise
-the skills with the fewest trainable templates. A template solved at least 95% of
-the time over 32 rollouts drops from the sampling floor (0.05) to a replay weight
-(0.01), so most of each batch comes from templates that still give signal.
+the skills with the fewest trainable templates. Proposers rotate through
+`--evolve-model` (Claude Haiku 5.5 through the gateway's Messages endpoint, GLM-5.3,
+GLM-5.3-flash) and `--evolve-solver` must solve each proposal without the
+reference. When the mean number of groups with signal over `--signal-window` steps
+falls below `--signal-floor`, a burst generates templates for `--burst-skills`
+skills: harder compositions when all-correct groups outnumber all-fail groups,
+ordinary ones otherwise.
+
+A template solved at least 95% of the time over 32 rollouts drops from the sampling
+floor (0.05) to a weight of 0.01. Mastered templates instead fill `--replay-share`
+of each batch (default 0.25), drawn uniformly, so the model keeps them. A warm start
+inherits the curriculum rates stored with the checkpoint.
 
 Previous databases and checkpoints are preserved. Template and curated-trace
 stores live inside the versioned data directory; earlier approvals are not loaded
@@ -143,7 +160,10 @@ into a new verifier automatically. Run directories cannot be reused.
 A training step samples 16 questions with 8 attempts each. The default learning
 rate is 3e-5, LoRA rank 32, and LoRA scale 2.0. Temperature is 1.0, with five turns
 and 256 generated tokens per turn. Gradient clipping is 1.0. A nonfinite loss
-or gradient skips the update.
+or gradient skips the update. `--lr-end` decays the learning rate linearly to that
+value at `--steps`. `sample_nll` in `metrics.jsonl` is the mean negative
+log-probability of sampled tokens; a sustained rise means the policy is getting
+noisier.
 
 The M3 Pro profile uses `--gen-batch 64 --micro-tokens 8192 --mem-gb 26`.
 `--gen-batch` controls parallel decoding. `--micro-tokens` controls padded tokens
@@ -159,7 +179,8 @@ micro-batches of 8,192, 16,384, and 32,768 tokens. Gradient measurements use lea
 zero and do not change saved weights. Results go to
 `engineering/hardware-benchmark.json`.
 
-Warm-start adapter weights with a new optimizer and a new run directory:
+Warm-start adapter weights with a new optimizer and a new run directory (a fresh
+Adam state makes large early updates on a trained adapter; prefer `--resume`):
 
 ```sh
 python train.py --name continued_v2 --adapter runs/first_v2/final --steps 50

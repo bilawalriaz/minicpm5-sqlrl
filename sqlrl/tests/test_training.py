@@ -147,3 +147,29 @@ def test_wrong_answers_never_get_positive_advantage():
     adv = train.group_advantages(group)
     assert adv[0] > 0 and adv[1] == 0.0 and all(a < 0 for a in adv[2:])
     assert abs(sum(train.group_advantages([ep("correct", 1.0), ep("wrong", 0.0)]))) < 1e-9
+
+
+def test_teacher_scale_and_near_policy_filter(monkeypatch):
+    group = [ep("wrong", 0.0), ep("correct", 1.0, "teacher")]
+    assert train.group_advantages(group, 0.5)[1] == pytest.approx(0.25)
+    nll = {0: 0.4, 1: 2.5}
+    monkeypatch.setattr(train, "action_nll", lambda model, tokens, mask: nll[tokens])
+    rescue = {0: SimpleNamespace(tokens=0, mask=None), 1: SimpleNamespace(tokens=1, mask=None)}
+    kept, scores = train.near_policy(None, rescue, 1.0)
+    assert list(kept) == [0] and scores == nll
+
+
+def test_weight_average_is_applied_temporarily_and_saved(tmp_path):
+    from curriculum import Curriculum
+    model = TinyModel()
+    average = train.WeightAverage(model, 0.5)
+    start = mx.array(model.lm_head.weight)
+    model.lm_head.weight = start + 2.0
+    average.update(model)
+    with average.applied(model):
+        assert mx.allclose(model.lm_head.weight, start + 1.0).item()
+    assert mx.allclose(model.lm_head.weight, start + 2.0).item()
+    args = SimpleNamespace(lora_layers=1, rank=2, scale=1.0, name='t')
+    train.save_checkpoint(model, optim.Adam(learning_rate=0.1), tmp_path / 'c', args, 1, Curriculum(), None, average)
+    saved, raw = mx.load(str(tmp_path / 'c' / 'adapters.safetensors')), mx.load(str(tmp_path / 'c' / 'raw_adapters.safetensors'))
+    assert mx.allclose(saved['lm_head.weight'], start + 1.0).item() and mx.allclose(raw['lm_head.weight'], start + 2.0).item()

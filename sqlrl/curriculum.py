@@ -71,6 +71,12 @@ class Curriculum:
         rates = self.skill_rates(min_seen)
         return sorted((s for s, p in rates.items() if p < below), key=rates.get)[:k]
 
+    def failing(self, k, min_seen=16, below=0.1):
+        """Trainable templates the student keeps failing, most-tried first."""
+        names = [t for t, p in self.rate.items()
+                 if t in env.TEMPLATES and t not in env.HELDOUT_TEMPLATES and p < below and self.seen[t] >= min_seen]
+        return sorted(names, key=lambda t: (-self.seen[t], self.rate[t], t))[:k]
+
     def evolve_targets(self, k, min_seen=16, below=0.6):
         """Weak skills first; when none is weak, the skills with the fewest trainable templates,
         then the highest solve rate, so generation continues after the pool is learned."""

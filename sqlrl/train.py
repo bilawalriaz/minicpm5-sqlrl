@@ -17,7 +17,9 @@ Logs go to runs/<name>/ for the dashboard:
 
 import argparse
 import json
+from contextlib import contextmanager
 import math
+import random
 import shutil
 import signal
 import subprocess
@@ -186,15 +188,63 @@ def rescue_groups(jobs, eps, args, tok, deadline):
     return rescue
 
 
-def save_checkpoint(model, opt, path, args, step, curriculum, selection=None):
+def action_nll(model, tokens, mask):
+    """Mean negative log-probability under `model` of the tokens marked in mask."""
+    idx = [i for i in range(len(tokens) - 1) if mask[i + 1]]
+    hidden = model.model(mx.array(tokens[:-1])[None])[0][mx.array(idx)]
+    logits = model.lm_head(hidden).astype(mx.float32)
+    tok = mx.take_along_axis(logits, mx.array([tokens[i + 1] for i in idx])[:, None], axis=-1)[:, 0]
+    return float((mx.logsumexp(logits, axis=-1) - tok).mean().item())
+
+
+def near_policy(model, rescue, max_nll):
+    """Keep teacher solutions the student finds plausible. Solutions far from the student's
+    distribution (hard templates, unfamiliar SQL style) degraded skills it already had.
+    Returns (kept rescues, NLL per group)."""
+    nll = {g: action_nll(model, e.tokens, e.mask) for g, e in rescue.items()}
+    return {g: e for g, e in rescue.items() if nll[g] <= max_nll}, nll
+
+
+class WeightAverage:
+    """Exponential moving average of the trainable weights. Small GRPO batches over a varied
+    template pool make the policy swing between SQL styles from step to step (held-out
+    scores moved 15-20 points in 4 steps); the average is what gets evaluated and saved."""
+
+    def __init__(self, model, decay, average=None):
+        self.decay = decay
+        self.average = average or dict(tree_flatten(model.trainable_parameters()))
+
+    def update(self, model):
+        if not self.decay:
+            return
+        current = dict(tree_flatten(model.trainable_parameters()))
+        self.average = {k: self.decay * v + (1 - self.decay) * current[k] for k, v in self.average.items()}
+        mx.eval(list(self.average.values()))
+
+    @contextmanager
+    def applied(self, model):
+        raw = dict(tree_flatten(model.trainable_parameters()))
+        model.load_weights(list(self.average.items()), strict=False)
+        try:
+            yield
+        finally:
+            model.load_weights(list(raw.items()), strict=False)
+
+
+def save_checkpoint(model, opt, path, args, step, curriculum, selection=None, average=None):
     """Write adapters, optimizer state and trainer state to a temporary directory, then
-    rename it, so an interrupted save never leaves a partial checkpoint."""
+    rename it, so an interrupted save never leaves a partial checkpoint. With a weight
+    average, adapters.safetensors holds the average (what was evaluated) and
+    raw_adapters.safetensors the training weights that --resume continues from."""
     if path.exists():
         raise FileExistsError(f"Checkpoint already exists: {path}")
     tmp = path.with_name(path.name + ".partial")
     shutil.rmtree(tmp, ignore_errors=True)
     tmp.mkdir(parents=True)
-    mx.save_safetensors(str(tmp / "adapters.safetensors"), dict(tree_flatten(model.trainable_parameters())))
+    raw = dict(tree_flatten(model.trainable_parameters()))
+    mx.save_safetensors(str(tmp / "adapters.safetensors"), average.average if average and average.decay else raw)
+    if average and average.decay:
+        mx.save_safetensors(str(tmp / "raw_adapters.safetensors"), raw)
     mx.save_safetensors(str(tmp / "optimizer.safetensors"), dict(tree_flatten(opt.state)))
     (tmp / "adapter_config.json").write_text(json.dumps({
         "fine_tune_type": "lora", "num_layers": args.lora_layers,
@@ -352,6 +402,7 @@ def main():
     ap.add_argument("--replay-share", type=float, default=0.25, help="share of each batch drawn uniformly from mastered templates")
     ap.add_argument("--evolve-min-seen", type=int, default=16, help="rollouts of a skill needed before judging it weak")
     ap.add_argument("--lr", type=float, default=3e-5)
+    ap.add_argument("--ema-decay", type=float, default=0.9, help="weight average used for evaluation and checkpoints (0 disables)")
     ap.add_argument("--lr-end", type=float, help="decay linearly to this learning rate at --steps (default: constant)")
     ap.add_argument("--rank", type=int, default=32)
     # LoRA output multiplier (alpha / rank). mlx-lm's SFT default is 20, which made
@@ -383,6 +434,9 @@ def main():
     ap.add_argument("--teacher", default=None, help="OpenCode Go model that rescues all-fail groups; glm-5.3-flash solved 9/9 hard questions in 3s")
     ap.add_argument("--teacher-effort", default="low", help="teacher reasoning_effort: low is fastest that GLM-5.3 accepts")
     ap.add_argument("--teacher-wait", type=float, default=60, help="seconds to wait for teacher answers after rollouts")
+    ap.add_argument("--teacher-max-nll", type=float, default=1.0,
+                    help="inject a teacher solution only if its mean per-token NLL under the student is at most this")
+    ap.add_argument("--teacher-scale", type=float, default=0.5, help="multiplier on teacher advantages")
     args = ap.parse_args()
 
     if args.adapter and args.resume:
@@ -412,9 +466,14 @@ def main():
     model.freeze()
     if args.adapter or args.resume:
         model = load_adapters(model, args.adapter or args.resume)
+        evaluated = dict(tree_flatten(model.trainable_parameters()))
+        raw = Path(args.resume or "") / "raw_adapters.safetensors"
+        if args.resume and raw.exists():
+            model.load_weights(str(raw), strict=False)
     else:
         linear_to_lora_layers(model, args.lora_layers, {"rank": args.rank, "scale": args.scale, "dropout": 0.0})
     model.eval()
+    average = WeightAverage(model, args.ema_decay, evaluated if args.resume else None)
     n_train = sum(v.size for _, v in tree_flatten(model.trainable_parameters()))
     print(f"trainable params: {n_train / 1e6:.1f}M")
     opt = optim.Adam(learning_rate=args.lr)
@@ -450,14 +509,16 @@ def main():
 
     def evaluate():
         nonlocal eval_s
-        row = run_eval(model, tok, args, log, step)
+        with average.applied(model):
+            row = run_eval(model, tok, args, log, step)
         eval_s = row["seconds"]
         return selection.add(step, row["by_split"]["heldout_select"], candidate=step >= first_step)
 
     try:
         if args.eval_every:
             evaluate()
-            check_s = run_eval(model, tok, args, log, step, check=f"initial_step_{step:05d}")["seconds"]
+            with average.applied(model):
+                check_s = run_eval(model, tok, args, log, step, check=f"initial_step_{step:05d}")["seconds"]
         while step < args.steps:
             if deadline:
                 # Leave room for the next step, its scheduled evaluation, the final evaluation and two checks.
@@ -467,13 +528,13 @@ def main():
                     break
             step += 1
             nonfinite_run = train_one_step(step, args, model, tok, opt, log, curriculum, teacher, evolver_state, tiers,
-                                           signals, nonfinite_run)
+                                           signals, nonfinite_run, average)
             step_times.append(time.time() - log.step_started)
             evaluating = args.eval_every and step % args.eval_every == 0
             # Every evaluated step keeps a checkpoint so it can be selected.
             if (args.save_every and step % args.save_every == 0) or evaluating:
                 with signals:
-                    save_checkpoint(model, opt, run / f"step_{step:05d}", args, step, curriculum, selection)
+                    save_checkpoint(model, opt, run / f"step_{step:05d}", args, step, curriculum, selection, average)
                 last_saved = step
             if evaluating and (reason := evaluate()):
                 stop_reason = reason
@@ -483,10 +544,10 @@ def main():
             evaluate()
             if not (run / f"step_{step:05d}").exists():
                 with signals:
-                    save_checkpoint(model, opt, run / f"step_{step:05d}", args, step, curriculum, selection)
+                    save_checkpoint(model, opt, run / f"step_{step:05d}", args, step, curriculum, selection, average)
             last_saved = step
         with signals:
-            save_checkpoint(model, opt, run / "final", args, step, curriculum, selection)
+            save_checkpoint(model, opt, run / "final", args, step, curriculum, selection, average)
         if args.eval_every and step >= first_step:
             best_step, best_score = selection.best()
             initial = next((h[1] for h in selection.history if not h[2]), None)
@@ -494,9 +555,10 @@ def main():
                                         "smoothed_selection_score": best_score, "initial_selection_score": initial,
                                         "beats_initial": initial is None or best_score > initial,
                                         "history": selection.history})
-            run_eval(model, tok, args, log, step, check=f"final_step_{step:05d}")
-            if best_step != step:
-                model.load_weights(str(run / f"step_{best_step:05d}" / "adapters.safetensors"), strict=False)
+            with average.applied(model):
+                run_eval(model, tok, args, log, step, check=f"final_step_{step:05d}")
+            # Checkpoint adapters hold the evaluated (averaged) weights.
+            model.load_weights(str(run / f"step_{best_step:05d}" / "adapters.safetensors"), strict=False)
             run_eval(model, tok, args, log, best_step, check=f"selected_step_{best_step:05d}")
     except BaseException as exc:
         # Weights only change inside the protected update, so they are a valid state after weights_step.
@@ -505,7 +567,7 @@ def main():
             signals.critical = True
             path = run / f"interrupted_step_{done:05d}"
             if not path.exists():
-                save_checkpoint(model, opt, path, args, done, curriculum, selection)
+                save_checkpoint(model, opt, path, args, done, curriculum, selection, average)
                 print(f"saved {path}")
         raise
     finally:
@@ -515,7 +577,7 @@ def main():
     log.status(phase="done", step=step, stop_reason=stop_reason, elapsed_hours=(time.time() - start_time) / 3600)
 
 
-def group_advantages(group):
+def group_advantages(group, teacher_scale=1.0):
     """Reward minus the group mean, with two limits:
     - No student answered correctly: students get 0. Ranking wrong SQL (reward 0) above no
       answer (-0.2) reinforced wrong SQL; in sql-v2.3 validation that made 3-21 wrong answers
@@ -531,6 +593,8 @@ def group_advantages(group):
         adv = e.reward - mean
         if e.source == "student":
             adv = 0.0 if not solved else (adv if e.outcome == "correct" else min(adv, 0.0))
+        else:
+            adv *= teacher_scale
         out.append(adv)
     return out
 
@@ -543,7 +607,8 @@ def burst_due(history, step, last_burst, window, floor, busy):
                 and (last_burst is None or step - last_burst >= window))
 
 
-def train_one_step(step, args, model, tok, opt, log, curriculum, teacher, evolver_state, tiers, signals, nonfinite_run):
+def train_one_step(step, args, model, tok, opt, log, curriculum, teacher, evolver_state, tiers, signals, nonfinite_run,
+                   average):
     """One GRPO step. Returns the number of consecutive skipped nonfinite updates."""
     t0 = log.step_started = time.time()
     new_templates = []
@@ -585,19 +650,33 @@ def train_one_step(step, args, model, tok, opt, log, curriculum, teacher, evolve
     t_roll = time.time() - t0
     curriculum.update(eps)
     if args.evolve_every and step % args.evolve_every == 0 and not evolver_state["future"]:
-        if weak := curriculum.evolve_targets(args.evolve_skills, min_seen=args.evolve_min_seen):
+        # Alternate: new templates for weak or thin skills, then stepping stones toward
+        # templates the student keeps failing, so coverage grows through learnable steps.
+        failing = curriculum.failing(args.evolve_skills, min_seen=args.evolve_min_seen)
+        if failing and (step // args.evolve_every) % 2 == 0:
+            specs = [(t, *env.TEMPLATES[t][1](random.Random(step))) for t in failing]
+            skills = [env.SKILLS[t][0] for t in failing]
+            evolver_state["future"] = evolver_state["pool"].submit(
+                evolve.evolve, skills, args.evolve_n, args.evolve_model, solver=args.evolve_solver, failing=specs)
+            print(f"  evolve: stepping stones toward {failing}")
+        elif weak := curriculum.evolve_targets(args.evolve_skills, min_seen=args.evolve_min_seen):
             evolver_state["future"] = evolver_state["pool"].submit(
                 evolve.evolve, weak, args.evolve_n, args.evolve_model, solver=args.evolve_solver)
             print(f"  evolve: generating templates for {weak}")
 
     rescue = rescue_groups(teacher_jobs, eps, args, tok, deadline=time.time() + args.teacher_wait) if teacher else {}
+    rescue, teacher_nll = near_policy(model, rescue, args.teacher_max_nll) if rescue else ({}, {})
+    if teacher_nll:
+        print(f"  teacher: kept {len(rescue)} of {len(teacher_nll)} solutions (NLL {sorted(round(v, 2) for v in teacher_nll.values())})")
 
-    batch, records, kept = [], [], 0
+    batch, records, kept, all_correct, all_failed = [], [], 0, 0, 0
     for g in range(args.prompts):
         group = eps[g * args.group:(g + 1) * args.group]
+        all_correct += all(e.outcome == "correct" for e in group)
+        all_failed += not any(e.outcome == "correct" for e in group)
         if g in rescue:
             group = group[:-1] + [rescue[g]]
-        advantages = group_advantages(group)
+        advantages = group_advantages(group, args.teacher_scale)
         kept += any(advantages)
         for e, adv in zip(group, advantages):
             records.append(episode_record(e, g, adv))
@@ -610,12 +689,17 @@ def train_one_step(step, args, model, tok, opt, log, curriculum, teacher, evolve
     recent = history[-args.signal_window:]
     burst = burst_due(history, step, evolver_state.get("burst_step"), args.signal_window, args.signal_floor,
                       busy=evolver_state["future"] is not None)
+    groups = evolver_state.setdefault("groups", [])
+    groups.append((all_correct, all_failed))
     if burst:
+        # Harder templates help only when groups are too easy; when they fail, ask for ordinary ones.
+        easy = sum(c for c, _ in groups[-args.signal_window:]) > sum(f for _, f in groups[-args.signal_window:])
         targets = curriculum.evolve_targets(args.burst_skills, min_seen=args.evolve_min_seen)
         evolver_state["future"] = evolver_state["pool"].submit(
-            evolve.evolve, targets, args.evolve_n, args.evolve_model, solver=args.evolve_solver, hard=True)
+            evolve.evolve, targets, args.evolve_n, args.evolve_model, solver=args.evolve_solver, hard=easy)
         evolver_state["burst_step"] = step
-        print(f"  evolve burst: {sum(recent) / len(recent):.1f} groups with signal over {len(recent)} steps; harder templates for {targets}")
+        print(f"  evolve burst: {sum(recent) / len(recent):.1f} groups with signal over {len(recent)} steps; "
+              f"{'harder' if easy else 'ordinary'} templates for {targets}")
 
     log.status(phase="train", step=step)
     opt.learning_rate = learning_rate(step, args.first_step, args.steps, args.lr, args.lr_end)
@@ -625,6 +709,7 @@ def train_one_step(step, args, model, tok, opt, log, curriculum, teacher, evolve
         try:
             with signals:
                 loss, grad_norm, n_tok = train_step(model, opt, batch, args.temp, args.micro_tokens, args.max_grad_norm)
+                average.update(model)
             nonfinite_run = 0
         except FloatingPointError as exc:
             skipped, nonfinite_run = True, nonfinite_run + 1
@@ -656,7 +741,7 @@ def train_one_step(step, args, model, tok, opt, log, curriculum, teacher, evolve
         "groups_kept": kept, "groups_total": args.prompts,
         "positive_wrong": sum(r["advantage"] > 0 and r["outcome"] != "correct" for r in records),
         "loss": loss, "grad_norm": grad_norm, "lr": float(opt.learning_rate.item()), "train_tokens": n_tok, "update_skipped_nonfinite": skipped,
-        "evolve_burst": bool(burst), "replay_prompts": n_replay,
+        "evolve_burst": bool(burst), "groups_all_correct": all_correct, "groups_all_failed": all_failed, "replay_prompts": n_replay,
         # Mean negative log-probability of sampled tokens: rises when the policy gets noisier.
         "sample_nll": -sum(sum(e.sample_logprobs) for e in eps) / max(sum(len(e.sample_logprobs) for e in eps), 1), "templates_trainable": sum(t not in env.HELDOUT_TEMPLATES for t in env.TEMPLATES),
         "rollout_s": t_roll, "train_s": t_train,
@@ -667,7 +752,8 @@ def train_one_step(step, args, model, tok, opt, log, curriculum, teacher, evolve
     if teacher:
         dead = sum(1 for g in range(args.prompts)
                    if not any(e.outcome == "correct" for e in eps[g * args.group:(g + 1) * args.group]))
-        row |= {"teacher_dead_groups": dead, "teacher_rescued": len(rescue), "teacher_spent": teacher.spent}
+        row |= {"teacher_dead_groups": dead, "teacher_rescued": len(rescue), "teacher_spent": teacher.spent,
+                "teacher_offered": len(teacher_nll), "teacher_nll": sorted(teacher_nll.values())}
     mx.reset_peak_memory()
     log.append("metrics.jsonl", row)
     log.write(f"samples/step_{step:05d}.json", records)

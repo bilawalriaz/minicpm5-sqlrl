@@ -107,6 +107,32 @@ def examples(skill):
     return "\n".join(rng.sample(lines, min(8, len(lines)))) or "(none yet)"
 
 
+STEPS = """You write training questions for a small text-to-SQL model. It keeps failing this question type:
+
+Question: {question}
+Reference SQL: {sql}
+
+Database schema:
+{schema}
+
+Values that exist in the data (use these exact spellings):
+{values}
+
+Write {n} simpler templates that each teach one step this question needs (for example one join, one \
+filter, one aggregate, or one subquery level), so the model can learn the steps before the whole. Use \
+other filters or columns than the failing question; do not restate it. Rules:
+- Every varying value is a {{placeholder}} in both the question and the SQL, with 2 to 12 values in "params" \
+taken from the lists above (numbers as numbers). In SQL, quote string placeholders: '{{category}}'.
+- The question states exactly which columns to return, any rounding (and the SQL uses ROUND(x, 2)), and \
+"return 0 if none" when an aggregate could be empty (the SQL then uses COALESCE).
+- Exactly one correct answer: never ORDER BY ... LIMIT on a value that can tie, such as a count.
+- One SQLite SELECT statement. Dates are text 'YYYY-MM-DD'. tier: 1 = one table, 2 = a join or grouping.
+
+Reply with JSON only:
+{{"templates": [{{"name": "snake_case_name", "tier": 1, "skills": [...], \
+"question": "...", "sql": "...", "params": {{"placeholder": [...]}}}}]}}
+Allowed skills: {skills}"""
+
 # Burst prompts ask for harder compositions when training groups stop carrying signal.
 HARD = """- Make each question harder than the existing templates: tier 3, combining the target skill with at \
 least two other listed skills, and needing a subquery or a derived table. Keep exactly one correct answer."""
@@ -132,11 +158,17 @@ def complete(client, model, prompt, max_tokens=8192):
     return resp.choices[0].message.content or "", cost_of(resp)
 
 
-def propose(client, model, skill, n, hard=False):
-    prompt = PROMPT.format(
-        schema=env.SCHEMA, values=value_lists(), skill=skill, description=env.SKILL_DESCRIPTIONS[skill],
-        examples=examples(skill), n=n, skills=sorted(env.SKILL_DESCRIPTIONS), difficulty=HARD if hard else "",
-    )
+def propose(client, model, skill, n, hard=False, failing=None):
+    """failing: (name, question, sql) of a template the student keeps failing; the proposals
+    are then stepping stones toward it, targeting its first skill."""
+    if failing:
+        prompt = STEPS.format(question=failing[1], sql=failing[2], schema=env.SCHEMA, values=value_lists(), n=n,
+                              skills=sorted(env.SKILL_DESCRIPTIONS))
+    else:
+        prompt = PROMPT.format(
+            schema=env.SCHEMA, values=value_lists(), skill=skill, description=env.SKILL_DESCRIPTIONS[skill],
+            examples=examples(skill), n=n, skills=sorted(env.SKILL_DESCRIPTIONS), difficulty=HARD if hard else "",
+        )
     text, cost = complete(client, model, prompt)
     start = text.find("{")
     # raw_decode reads the first JSON object and ignores trailing prose or code fences.
@@ -144,6 +176,8 @@ def propose(client, model, skill, n, hard=False):
     for spec in specs:
         if isinstance(spec, dict):
             spec["target_skill"], spec["model"] = skill, model
+            if failing and isinstance(spec.get("skills"), list) and skill not in spec["skills"]:
+                spec["target_skill"] = spec["skills"][0] if spec["skills"] else skill
     return [spec for spec in specs if isinstance(spec, dict)], cost
 
 
@@ -319,10 +353,11 @@ def validate(spec, teacher, known_sql):
             con.close()
 
 
-def evolve(skills, n, model="glm-5.3-flash", workers=4, solver="glm-5.3-flash", hard=False):
+def evolve(skills, n, model="glm-5.3-flash", workers=4, solver="glm-5.3-flash", hard=False, failing=None):
     """Propose n templates per skill, validate them, store every verdict. Returns accepted specs.
     model may be a comma-separated list; skills rotate through it. The solver that checks
-    proposals should differ from the proposers, so acceptance is not one model agreeing with itself."""
+    proposals should differ from the proposers, so acceptance is not one model agreeing with itself.
+    failing: optional list of (name, question, sql), one per skill, for stepping-stone proposals."""
     models = model.split(",")
     client, teacher = make_client(), Teacher(solver, workers=1)
     con = connect()
@@ -330,7 +365,7 @@ def evolve(skills, n, model="glm-5.3-flash", workers=4, solver="glm-5.3-flash", 
 
     def safe_propose(i, skill):
         try:
-            return propose(client, models[i % len(models)], skill, n, hard)
+            return propose(client, models[i % len(models)], skill, n, hard, failing[i] if failing else None)
         except Exception as exc:  # one model's API failure should not discard the others' proposals
             print(f"  evolve: {models[i % len(models)]} failed for {skill}: {type(exc).__name__}: {str(exc)[:120]}")
             return [], 0.0
