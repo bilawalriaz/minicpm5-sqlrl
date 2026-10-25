@@ -96,3 +96,13 @@ def test_teacher_uses_same_terminal_call_and_masks():
     assert 0 in ep.mask[2:]
     with pytest.raises(ValueError, match='token limit'):
         as_episode(Tokenizer(), student, solution, max_tokens=10)
+
+
+def test_ungraded_submission_keeps_the_complete_answer(monkeypatch):
+    tok = Tokenizer()
+    monkeypatch.setattr(engine, 'prompt_tokens', lambda *a: [100, 101])
+    monkeypatch.setattr(engine, '_shared_prefix_cache', lambda *a: ([], 1))
+    text = call(query='SELECT id FROM orders')
+    monkeypatch.setattr(engine, '_generate', lambda *a, **k: ([(tok.encode(text) + [0], 'stop', [], [0.0] * (len(text) + 1))], 1))
+    eps, _ = engine.rollout(None, tok, [env.Task('demo', 0, 'All orders', '')], grade=False)
+    assert eps[0].outcome == 'submitted' and len(eps[0].answer_rows) == 1200

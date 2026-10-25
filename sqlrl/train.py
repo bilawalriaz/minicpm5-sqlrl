@@ -209,9 +209,19 @@ def save_checkpoint(model, opt, path, args, step, curriculum, selection=None):
     tmp.rename(path)
 
 
-def load_optimizer(opt, model, path):
+def load_optimizer(opt, model, path, lr):
+    """Restore Adam moments and step count. MLX keeps the learning rate in the state too;
+    it is reset to `lr` so --lr applies to a resumed run."""
     opt.init(model.trainable_parameters())
     opt.state = tree_unflatten(list(mx.load(str(path / "optimizer.safetensors")).items()))
+    opt.learning_rate = lr
+
+
+def learning_rate(step, first_step, last_step, lr, lr_end):
+    """Linear decay from lr at first_step to lr_end at last_step; constant when lr_end is None."""
+    if lr_end is None or last_step <= first_step:
+        return lr
+    return lr + (lr_end - lr) * (step - first_step) / (last_step - first_step)
 
 
 def git_revision():
@@ -342,6 +352,7 @@ def main():
     ap.add_argument("--replay-share", type=float, default=0.25, help="share of each batch drawn uniformly from mastered templates")
     ap.add_argument("--evolve-min-seen", type=int, default=16, help="rollouts of a skill needed before judging it weak")
     ap.add_argument("--lr", type=float, default=3e-5)
+    ap.add_argument("--lr-end", type=float, help="decay linearly to this learning rate at --steps (default: constant)")
     ap.add_argument("--rank", type=int, default=32)
     # LoRA output multiplier (alpha / rank). mlx-lm's SFT default is 20, which made
     # RL updates ~10x too large here: held-out pass@1 halved within 2 steps.
@@ -407,12 +418,12 @@ def main():
     n_train = sum(v.size for _, v in tree_flatten(model.trainable_parameters()))
     print(f"trainable params: {n_train / 1e6:.1f}M")
     opt = optim.Adam(learning_rate=args.lr)
-    first_step = 1
+    first_step = args.first_step = 1
     if resume_state:
         if resume_state["verifier_version"] != env.VERIFIER_VERSION:
             print(f"resuming a {resume_state['verifier_version']} checkpoint under {env.VERIFIER_VERSION}")
-        load_optimizer(opt, model, Path(args.resume))
-        first_step = resume_state["step"] + 1
+        load_optimizer(opt, model, Path(args.resume), args.lr)
+        first_step = args.first_step = resume_state["step"] + 1
     tiers = tuple(int(t) for t in args.tiers.split(","))
     teacher = Teacher(args.teacher, max_turns=args.max_turns, effort=args.teacher_effort,
                       show_schema=not args.hide_schema) if args.teacher else None
@@ -504,6 +515,26 @@ def main():
     log.status(phase="done", step=step, stop_reason=stop_reason, elapsed_hours=(time.time() - start_time) / 3600)
 
 
+def group_advantages(group):
+    """Reward minus the group mean, with two limits:
+    - No student answered correctly: students get 0. Ranking wrong SQL (reward 0) above no
+      answer (-0.2) reinforced wrong SQL; in sql-v2.3 validation that made 3-21 wrong answers
+      per step positive and sampled-token NLL rose from 0.05 to 0.55 in 8 steps. A rescued
+      group still learns from the teacher's verified solution.
+    - Otherwise a student answer that is not correct never gets a positive advantage.
+    Pushing every failed attempt below the teacher once taught the model to stop querying, so
+    students in a rescued group are not scored against the teacher."""
+    mean = sum(e.reward for e in group) / len(group)
+    solved = any(e.outcome == "correct" for e in group if e.source == "student")
+    out = []
+    for e in group:
+        adv = e.reward - mean
+        if e.source == "student":
+            adv = 0.0 if not solved else (adv if e.outcome == "correct" else min(adv, 0.0))
+        out.append(adv)
+    return out
+
+
 def burst_due(history, step, last_burst, window, floor, busy):
     """True when mean groups with signal over the last `window` steps is below `floor`, no
     generation is running, and the last burst was at least `window` steps ago."""
@@ -566,18 +597,9 @@ def train_one_step(step, args, model, tok, opt, log, curriculum, teacher, evolve
         group = eps[g * args.group:(g + 1) * args.group]
         if g in rescue:
             group = group[:-1] + [rescue[g]]
-        mean = sum(e.reward for e in group) / len(group)
-        student_mean = sum(e.reward for e in group if e.source == "student") / sum(e.source == "student" for e in group)
-        if any(e.reward != mean for e in group):
-            kept += 1
-        for e in group:
-            adv = e.reward - mean
-            if g in rescue and e.source == "student":
-                # Score students against each other, not against the teacher. Pushing
-                # every failed attempt below the teacher taught the model to stop
-                # querying ("answered without a query" went 48 -> 76 of 128 in three
-                # steps); relative to each other, trying still beats not trying.
-                adv = e.reward - student_mean
+        advantages = group_advantages(group)
+        kept += any(advantages)
+        for e, adv in zip(group, advantages):
             records.append(episode_record(e, g, adv))
             if adv != 0:
                 batch.append((e.tokens, e.mask, adv))
@@ -596,6 +618,7 @@ def train_one_step(step, args, model, tok, opt, log, curriculum, teacher, evolve
         print(f"  evolve burst: {sum(recent) / len(recent):.1f} groups with signal over {len(recent)} steps; harder templates for {targets}")
 
     log.status(phase="train", step=step)
+    opt.learning_rate = learning_rate(step, args.first_step, args.steps, args.lr, args.lr_end)
     t1 = time.time()
     loss, grad_norm, n_tok, skipped = 0.0, 0.0, 0, False
     if batch:
@@ -631,8 +654,11 @@ def train_one_step(step, args, model, tok, opt, log, curriculum, teacher, evolve
         "gen_tokens_mean": sum(sum(e.mask) for e in eps) / len(eps),
         "prose_tokens_mean": sum(e.prose_tokens for e in eps) / len(eps),
         "groups_kept": kept, "groups_total": args.prompts,
-        "loss": loss, "grad_norm": grad_norm, "train_tokens": n_tok, "update_skipped_nonfinite": skipped,
-        "evolve_burst": bool(burst), "replay_prompts": n_replay, "templates_trainable": sum(t not in env.HELDOUT_TEMPLATES for t in env.TEMPLATES),
+        "positive_wrong": sum(r["advantage"] > 0 and r["outcome"] != "correct" for r in records),
+        "loss": loss, "grad_norm": grad_norm, "lr": float(opt.learning_rate.item()), "train_tokens": n_tok, "update_skipped_nonfinite": skipped,
+        "evolve_burst": bool(burst), "replay_prompts": n_replay,
+        # Mean negative log-probability of sampled tokens: rises when the policy gets noisier.
+        "sample_nll": -sum(sum(e.sample_logprobs) for e in eps) / max(sum(len(e.sample_logprobs) for e in eps), 1), "templates_trainable": sum(t not in env.HELDOUT_TEMPLATES for t in env.TEMPLATES),
         "rollout_s": t_roll, "train_s": t_train,
         "gen_tps": rstats["gen_tokens"] / max(rstats["seconds"], 1e-9),
         "peak_mem_gb": mx.get_peak_memory() / 1024**3,

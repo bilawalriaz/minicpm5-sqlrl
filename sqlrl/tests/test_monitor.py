@@ -57,3 +57,11 @@ def test_heldout_selection_drop_is_reported(tmp_path):
              {"step": 10, "pass1": 0.5, "by_split": {"heldout_select": 0.3}}]
     alerts, stop = monitor.check(tmp_path, [], evals, None, ARGS, 0)
     assert stop is None and "held-out selection 0.300" in alerts[0]
+
+
+def test_policy_noise_alert_and_stop(tmp_path):
+    rows = [metric(i, sample_nll=0.05) for i in range(5)] + [metric(5 + i, sample_nll=v) for i, v in enumerate([0.3, 0.4, 0.5])]
+    alerts, stop = monitor.check(tmp_path, rows, [], None, ARGS, 0)
+    assert any("NLL" in a for a in alerts) and "policy noise" in stop
+    rows[-2]["sample_nll"] = 0.1
+    assert monitor.check(tmp_path, rows, [], None, ARGS, 0)[1] is None

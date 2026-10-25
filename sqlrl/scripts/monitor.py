@@ -7,7 +7,8 @@ trainer saves an interrupted checkpoint) when:
   - a student answer with no table read is graded correct (verifier breach),
   - evaluation pass@1 is at least --collapse below both the first and the best
     evaluation for two evaluations in a row,
-  - status.json has not changed for --hang-minutes while the process is alive.
+  - status.json has not changed for --hang-minutes while the process is alive,
+  - sampled-token NLL stays above 5x its early median for 3 steps (policy noise).
 It records, without stopping: skipped nonfinite updates, high MLX peak memory,
 falling training reward, a held-out selection score below its best, and a trainer
 exit without the done phase.
@@ -47,6 +48,13 @@ def check(run, metrics, evals, status, args, now):
             recent = sum(m["reward_mean"] for m in metrics[-10:]) / 10
             if recent < early - 0.3:
                 alerts.append(f"training reward fell from {early:.3f} to {recent:.3f}")
+        nll = [m["sample_nll"] for m in metrics if "sample_nll" in m]
+        if len(nll) >= 8:
+            base = sorted(nll[:5])[2]
+            if nll[-1] > 3 * base:
+                alerts.append(f"sampled-token NLL {nll[-1]:.3f}, early median {base:.3f}")
+            if all(v > 5 * base for v in nll[-3:]):
+                stop = f"policy noise: sampled-token NLL above 5x its early median ({base:.3f}) for 3 steps"
         samples = read_json(run / "samples" / f"step_{last['step']:05d}.json", [])
         breach = [s for s in samples if s["source"] == "student" and s["outcome"] == "correct" and s["literal"]]
         if breach:

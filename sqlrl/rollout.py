@@ -153,7 +153,7 @@ def _generate(model, tokenizer, prompts, caches, temp, max_tokens, batch_size, o
 
 def rollout(model, tokenizer, tasks, temp=1.0, max_turns=5, max_tokens=256,
             show_schema=True, batch_size=32, verbose=False, on_turn=None, live=None, prose_penalty=0.0,
-            no_answer_reward=-0.2):
+            no_answer_reward=-0.2, grade=True):
     """live, if given, is called about once a second with (episodes, {id(episode):
     text of the turn being generated}) so a dashboard can show rollouts as they stream.
 
@@ -167,7 +167,7 @@ def rollout(model, tokenizer, tasks, temp=1.0, max_turns=5, max_tokens=256,
         episodes, stats = [], {"gen_tokens": 0, "seconds": 0.0}
         for i in range(0, len(tasks), MAX_IN_FLIGHT):
             eps, s = rollout(model, tokenizer, tasks[i:i + MAX_IN_FLIGHT], temp, max_turns, max_tokens,
-                             show_schema, batch_size, verbose, on_turn, live, prose_penalty, no_answer_reward)
+                             show_schema, batch_size, verbose, on_turn, live, prose_penalty, no_answer_reward, grade)
             episodes += eps
             stats = {k: stats[k] + s[k] for k in stats}
         return episodes, stats
@@ -231,6 +231,9 @@ def rollout(model, tokenizer, tasks, temp=1.0, max_turns=5, max_tokens=256,
                     e.done, e.final_sql = True, query
                     if err:
                         e.reward, e.outcome, e.verifier_reason = 0.0, "wrong", err
+                        continue
+                    if not grade:  # demo use: keep the answer, no reference to compare with
+                        e.answer_rows, e.outcome, e.verifier_reason = rows, "submitted", "not graded"
                         continue
                     if e.task.gold_sql not in gold:
                         expected, gold_err = env.execute(con, e.task.gold_sql)

@@ -61,9 +61,11 @@ def test_checkpoint_restores_optimizer_state_and_refuses_overwrite(tmp_path):
     train.save_checkpoint(model, opt, tmp_path / 'step_00001', args, 1, curriculum)
     assert not (tmp_path / 'step_00001.partial').exists()
     restored = optim.Adam(learning_rate=0.1)
-    train.load_optimizer(restored, model, tmp_path / 'step_00001')
+    train.load_optimizer(restored, model, tmp_path / 'step_00001', 0.02)
     for (k, a), (_, b) in zip(sorted(tree_flatten(opt.state)), sorted(tree_flatten(restored.state))):
-        assert mx.array_equal(a, b).item(), k
+        if k != 'learning_rate':
+            assert mx.array_equal(a, b).item(), k
+    assert restored.learning_rate.item() == pytest.approx(0.02)  # --lr wins over the saved rate
     state = json.loads((tmp_path / 'step_00001' / 'trainer_state.json').read_text())
     assert state['step'] == 1 and state['curriculum']['rate'] == {'count_city': 0.25}
     with pytest.raises(FileExistsError):
@@ -121,3 +123,27 @@ def test_burst_due_on_sustained_low_signal_with_cooldown():
     assert train.burst_due([2] * 11, 11, 6, 5, 6, busy=False)
     assert not train.burst_due([7] * 6, 6, None, 5, 6, busy=False)
     assert not train.burst_due([2] * 6, 6, None, 5, 0, busy=False)              # disabled
+
+
+def test_linear_learning_rate_decay():
+    assert train.learning_rate(5, 1, 9, 3e-5, None) == 3e-5
+    assert train.learning_rate(1, 1, 9, 3e-5, 1e-5) == pytest.approx(3e-5)
+    assert train.learning_rate(5, 1, 9, 3e-5, 1e-5) == pytest.approx(2e-5)
+    assert train.learning_rate(9, 1, 9, 3e-5, 1e-5) == pytest.approx(1e-5)
+
+
+def ep(outcome, reward, source="student"):
+    return SimpleNamespace(outcome=outcome, reward=reward, source=source)
+
+
+def test_wrong_answers_never_get_positive_advantage():
+    # All students failed: no student signal; the teacher's solution is the only positive.
+    rescued = [ep("wrong", 0.0), ep("length", -0.2), ep("wrong", 0.0), ep("correct", 1.0, "teacher")]
+    adv = train.group_advantages(rescued)
+    assert adv[:3] == [0.0, 0.0, 0.0] and adv[3] > 0
+    assert train.group_advantages([ep("wrong", 0.0), ep("max_turns", -0.2)]) == [0.0, 0.0]
+    # One correct, one wrong, many unanswered: the wrong answer would be above the mean.
+    group = [ep("correct", 1.0), ep("wrong", 0.0)] + [ep("length", -0.2)] * 6
+    adv = train.group_advantages(group)
+    assert adv[0] > 0 and adv[1] == 0.0 and all(a < 0 for a in adv[2:])
+    assert abs(sum(train.group_advantages([ep("correct", 1.0), ep("wrong", 0.0)]))) < 1e-9
