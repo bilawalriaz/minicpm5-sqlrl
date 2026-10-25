@@ -184,7 +184,7 @@ def review(client, model, spec, question, sql, con):
     """Returns (approved, reason, dollars) from a reviewer model that sees the reference SQL."""
     rows = env.execute(con, sql)[0]
     text, cost = complete(client, model, REVIEW.format(schema=env.SCHEMA, question=question, sql=sql,
-                                                       count=len(rows), rows=rows[:5]), max_tokens=1024)
+                                                       count=len(rows), rows=rows[:5]), max_tokens=4096)
     start = text.find("{")
     verdict = json.JSONDecoder().raw_decode(text, start)[0] if start >= 0 else {}
     return verdict.get("verdict") == "approve", str(verdict.get("reason", "no verdict"))[:200], cost
@@ -383,7 +383,10 @@ def validate(spec, teacher, known_sql, reviewer=None):
             return False, f"fresh solver got {solved}/{len(selected)} distinct questions right"
         note = ""
         if reviewer:
-            approved, why, cost = review(*reviewer, spec, *selected[0], cons[0])
+            try:
+                approved, why, cost = review(*reviewer, spec, *selected[0], cons[0])
+            except Exception as exc:  # an unusable review is a rejection, not a failed round
+                approved, why, cost = False, f"review failed: {type(exc).__name__}: {str(exc)[:100]}", 0.0
             teacher.spent += cost
             if not approved:
                 return False, f"reviewer {reviewer[1]} rejected: {why}"

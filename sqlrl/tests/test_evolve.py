@@ -163,3 +163,12 @@ def test_uncovered_combinations_skip_existing_pairs():
     combos = evolve.uncovered_combinations(1000)
     have = [set(env.SKILLS[t]) for t in env.TEMPLATES if t not in env.HELDOUT_TEMPLATES]
     assert combos and not any(set(c) <= h for c in combos for h in have)
+
+
+def test_failed_review_rejects_without_crashing(monkeypatch):
+    teacher = SimpleNamespace(solve=lambda task: {'correct': True}, spent=0.0)
+    def broken(*a, **k):
+        raise ValueError('reply hit the token limit')
+    monkeypatch.setattr(evolve, 'complete', broken)
+    ok, why = evolve.validate(spec(), teacher, set(), reviewer=(None, 'rev'))
+    assert not ok and why.startswith('reviewer rev rejected: review failed')
