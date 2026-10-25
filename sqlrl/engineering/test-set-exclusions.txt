@@ -1,0 +1,11 @@
+accepted generated templates checked: 202
+avg_order_value_country EXCLUDED, overlaps avg_order_value_by_country_status
+customers_multi_category kept
+never_shipped_customers_city kept
+returned_share_category kept
+latest_signup_country kept
+products_above_avg_category kept
+busiest_month_year kept
+distinct_products_city kept
+customers_spent_over kept
+top_city_orders_country kept

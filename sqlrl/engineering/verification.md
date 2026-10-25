@@ -332,3 +332,25 @@ compared with each test question using `evolve.contained` on the training fixtur
 A test template with any overlapping question is excluded from the headline number
 and listed separately. No other test template is dropped, and the test set is not
 used to choose a checkpoint or setting.
+
+## Distillation on the 1B model
+
+sft_1b_v1 resumed final_v23b/step_00200 (best smoothed selection score in that run;
+final_v23b was stopped after three flat evaluations: 0.454, 0.447, 0.447). Data: 787
+verified GLM-5.3-flash solutions over 212 trainable templates plus 567 correct
+student transcripts from final_v23b and v23_ema_check; all passed the 1.5 NLL filter
+(median 0.078). 86 updates at lr 1e-5, two epochs, EMA 0.9.
+
+| | Before | After |
+| --- | --- | --- |
+| Selection set | 0.461 | 0.513 |
+| Check set | 0.653 | 0.722 |
+| Reserved parameters | 0.969 | 0.969 |
+
+sft_1b_v1/final is the final 1B checkpoint (higher selection score).
+
+## Test-set exclusion
+
+`test-set-exclusions.txt` applies the recorded rule to 202 accepted generated
+templates: `avg_order_value_country` overlaps `avg_order_value_by_country_status`
+and is excluded from headline test numbers. The other nine test templates are kept.

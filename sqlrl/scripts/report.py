@@ -38,6 +38,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("models", nargs="+", help="label=path.jsonl")
     ap.add_argument("--out", type=Path)
+    ap.add_argument("--exclude", nargs="*", default=[], help="templates left out of the split rows (listed in the template rows)")
     args = ap.parse_args()
     models = [(m.split("=", 1)[0], load(m.split("=", 1)[1])) for m in args.models]
     lines = ["| Split | " + " | ".join(label for label, _ in models) + " |",
@@ -45,7 +46,7 @@ def main():
     for split, title in SPLITS.items():
         cells = []
         for _, by_q in models:
-            rates = [sum(v) / len(v) for (s, _, _), v in by_q.items() if s == split]
+            rates = [sum(v) / len(v) for (s, t, _), v in by_q.items() if s == split and t not in args.exclude]
             if not rates:
                 cells.append("n/a")
                 continue
@@ -61,7 +62,8 @@ def main():
         for _, by_q in models:
             v = [x for (s, t, _), xs in by_q.items() if (s, t) == (split, template) for x in xs]
             cells.append(f"{sum(v) / len(v):.0%}" if v else "n/a")
-        lines.append(f"| {template} | {split} | " + " | ".join(cells) + " |")
+        note = " (excluded)" if template in args.exclude else ""
+        lines.append(f"| {template}{note} | {split} | " + " | ".join(cells) + " |")
     text = "\n".join(lines) + "\n"
     print(text)
     if args.out:
