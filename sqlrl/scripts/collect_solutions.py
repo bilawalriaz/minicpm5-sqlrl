@@ -25,11 +25,13 @@ def main():
     ap.add_argument("--model", default="glm-5.3-flash")
     ap.add_argument("--out", type=Path, default=env.DATA_DIR / "solutions.jsonl")
     ap.add_argument("--workers", type=int, default=8)
+    ap.add_argument("--skip-existing", type=Path, help="only templates without solutions in this file; append to --out")
     args = ap.parse_args()
     evolve.load_accepted()
     tasks = []
+    have = {json.loads(line)["template"] for line in args.skip_existing.read_text().splitlines()} if args.skip_existing else set()
     for name, (tier, fn) in env.TEMPLATES.items():
-        if name in env.HELDOUT_TEMPLATES:
+        if name in env.HELDOUT_TEMPLATES or name in have:
             continue
         seen = {}
         for seed in range(64):
@@ -42,7 +44,7 @@ def main():
     with ThreadPoolExecutor(args.workers) as pool:
         results = list(pool.map(teacher.solve, tasks))
     kept = 0
-    with open(args.out, "w") as f:
+    with open(args.out, "a" if args.skip_existing else "w") as f:
         for task, sol in zip(tasks, results):
             if sol["correct"]:
                 kept += 1

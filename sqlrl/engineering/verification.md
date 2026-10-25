@@ -393,3 +393,13 @@ and the unchanged shop prompt.
 Runs (k 4, temperature 1, 5 turns, 384 tokens per turn), queued after the 2B pipeline:
 `runs/spider_1b_released`, `runs/spider_2b_released`, `runs/spider_1b_sql`
 (`release/MiniCPM5-1B-SQL`). Results: pending.
+
+## Real-question seeds for template generation
+
+`scripts/fetch_seeds.py` downloads 1,500 question/SQL pairs from Spider's train split
+(Hugging Face `xlangai/spider`). Spider dev stays the cross-schema evaluation set and
+is never used for training. `evolve.py --seeds` shows four random pairs with each
+proposal as examples of phrasing and query shape; templates are written for the shop
+schema and pass the usual checks (four fixtures, solver, Haiku review, held-out
+containment). Their verified solutions are appended to `solutions_v2.jsonl` before the
+2B pipeline's second distillation stage reads it; the running RL stage is unchanged.

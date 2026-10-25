@@ -115,7 +115,7 @@ def test_proposers_rotate_and_one_failure_keeps_the_rest(tmp_path, monkeypatch):
     monkeypatch.setattr(evolve, 'DB', tmp_path / 'templates.db')
     calls = []
 
-    def propose(client, model, skill, n, hard=False, failing=None, combo=None):
+    def propose(client, model, skill, n, hard=False, *optional):
         calls.append((model, skill, hard))
         if model == 'broken':
             raise RuntimeError('gateway error')
@@ -178,3 +178,12 @@ def test_reused_names_get_a_suffix(tmp_path, monkeypatch):
     monkeypatch.setattr(evolve, 'DB', tmp_path / 'templates.db')
     specs = evolve.unique_names([{'name': 'count_city'}, {'name': 'new_one'}, {'name': 'new_one'}])
     assert [s['name'] for s in specs] == ['count_city_2', 'new_one', 'new_one_2']
+
+
+def test_seed_examples_are_shown_to_the_proposer(monkeypatch):
+    seen = []
+    monkeypatch.setattr(evolve, 'complete', lambda client, model, prompt: seen.append(prompt) or ('{"templates": []}', 0.0))
+    monkeypatch.setattr(evolve, 'value_lists', lambda: '')
+    seeds = [{'question': 'How many students does each advisor have?', 'query': 'SELECT advisor, count(*) FROM Student GROUP BY advisor'}]
+    evolve.propose(None, 'm', 'group_by', 2, seeds=seeds)
+    assert 'not their tables' in seen[0] and 'each advisor' in seen[0]

@@ -10,6 +10,7 @@ verifier's data directory.
 """
 
 import argparse
+from pathlib import Path
 import json
 import random
 import re
@@ -152,6 +153,11 @@ joins, grouping and aggregation, with nothing extra.
 
 Reply with JSON only: {{"verdict": "approve" | "reject", "reason": "<one sentence>"}}"""
 
+SEEDS = """
+- For variety, here are real questions people asked about other databases. Borrow their phrasing and \
+query shapes, not their tables; every template must use the shop schema above:
+{seeds}"""
+
 COMBO = """
 - Each template must use all of these skills together: {combo}."""
 
@@ -190,7 +196,7 @@ def review(client, model, spec, question, sql, con):
     return verdict.get("verdict") == "approve", str(verdict.get("reason", "no verdict"))[:200], cost
 
 
-def propose(client, model, skill, n, hard=False, failing=None, combo=None):
+def propose(client, model, skill, n, hard=False, failing=None, combo=None, seeds=None):
     """failing: (name, question, sql) of a template the student keeps failing; the proposals
     are then stepping stones toward it, targeting its first skill."""
     if failing:
@@ -200,7 +206,8 @@ def propose(client, model, skill, n, hard=False, failing=None, combo=None):
         prompt = PROMPT.format(
             schema=env.SCHEMA, values=value_lists(), skill=skill, description=env.SKILL_DESCRIPTIONS[skill],
             examples=examples(skill), n=n, skills=sorted(env.SKILL_DESCRIPTIONS),
-            difficulty=(HARD if hard else "") + (COMBO.format(combo=", ".join(combo)) if combo else ""),
+            difficulty=(HARD if hard else "") + (COMBO.format(combo=", ".join(combo)) if combo else "")
+            + (SEEDS.format(seeds="\n".join(f"  Q: {r['question']}\n  SQL: {r['query']}" for r in seeds)) if seeds else ""),
         )
     text, cost = complete(client, model, prompt)
     start = text.find("{")
@@ -414,13 +421,14 @@ def unique_names(specs):
 
 
 def evolve(skills, n, model="glm-5.3-flash", workers=4, solver="glm-5.3-flash", hard=False, failing=None,
-           reviewer=None, combos=None):
+           reviewer=None, combos=None, seeds=None, seed_count=4):
     """Propose n templates per skill, validate them, store every verdict. Returns accepted specs.
     model may be a comma-separated list; skills rotate through it. The solver that checks
     proposals should differ from the proposers, so acceptance is not one model agreeing with itself.
     failing: optional list of (name, question, sql), one per skill, for stepping-stone proposals.
     reviewer: model that must approve each accepted template. combos: optional list of skill
-    tuples, one per skill, that each proposal must combine."""
+    tuples, one per skill, that each proposal must combine. seeds: real question/SQL pairs from other
+    schemas; seed_count random ones are shown with each proposal for phrasing and query shape."""
     models = model.split(",")
     client, teacher = make_client(), Teacher(solver, workers=1)
     con = connect()
@@ -429,7 +437,8 @@ def evolve(skills, n, model="glm-5.3-flash", workers=4, solver="glm-5.3-flash", 
     def safe_propose(i, skill):
         try:
             return propose(client, models[i % len(models)], skill, n, hard, failing[i] if failing else None,
-                           combos[i] if combos else None)
+                           combos[i] if combos else None,
+                           random.Random(f"{skill}{i}{time.time()}").sample(seeds, seed_count) if seeds else None)
         except Exception as exc:  # one model's API failure should not discard the others' proposals
             print(f"  evolve: {models[i % len(models)]} failed for {skill}: {type(exc).__name__}: {str(exc)[:120]}")
             return [], 0.0
@@ -512,6 +521,8 @@ if __name__ == "__main__":
     ap.add_argument("--solver", default="glm-5.3-flash", help="model that must solve proposals without the reference")
     ap.add_argument("--hard", action="store_true", help="ask for tier-3 compositions with subqueries")
     ap.add_argument("--reviewer", help="model that must approve each template, e.g. claude-haiku-5-5")
+    ap.add_argument("--seeds", type=Path, help="jsonl of real question/SQL pairs (scripts/fetch_seeds.py)")
+    ap.add_argument("--seed-count", type=int, default=4, help="seed examples shown with each proposal")
     ap.add_argument("--coverage", type=int, default=0,
                     help="instead of --skills, propose for this many skill pairs and triples not yet combined")
     ap.add_argument("--list", action="store_true")
@@ -530,8 +541,9 @@ if __name__ == "__main__":
             skills = ([c[0] for c in combos] if combos else
                       sorted(env.SKILL_DESCRIPTIONS) if args.skills == "all" else args.skills.split(","))
             t0 = time.time()
+            seeds = [json.loads(line) for line in args.seeds.read_text().splitlines()] if args.seeds else None
             accepted, stats = evolve(skills, args.n, args.model, solver=args.solver, hard=args.hard,
-                                     reviewer=args.reviewer, combos=combos)
+                                     reviewer=args.reviewer, combos=combos, seeds=seeds, seed_count=args.seed_count)
             print(f"{stats['accepted']} of {stats['proposed']} accepted in {time.time() - t0:.0f}s, ${stats['spent']:.4f}")
             for spec in accepted:
                 print(f"  + {spec['name']} {spec['skills']}: {spec['question']}")
