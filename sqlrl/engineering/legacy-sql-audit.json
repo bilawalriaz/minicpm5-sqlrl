@@ -1,0 +1,136 @@
+{
+  "run": "curriculum_50b",
+  "verifier_version": "sql-v2.1",
+  "comparison": "SQL semantics on original data plus v2 fixtures; legacy protocol not regraded",
+  "steps": 27,
+  "counts": {
+    "accepted_to_accepted": 1914,
+    "rejected_to_rejected": 471,
+    "no_recorded_submission": 719,
+    "accepted_to_rejected": 352
+  },
+  "changed_templates": {
+    "frequent_customers": 24,
+    "units_of_product": 64,
+    "priciest_in_cat": 1,
+    "products_never_ordered_by_year": 124,
+    "products_never_ordered_in_country": 107,
+    "top_spenders": 12,
+    "cheap_product_rich_categories": 1,
+    "categories_bought_by_both_cities": 6,
+    "best_category_year": 2,
+    "revenue_month": 6,
+    "distinct_products_shipped_year": 4,
+    "distinct_statuses_by_city": 1
+  },
+  "examples": [
+    {
+      "step": "step_00002",
+      "template": "frequent_customers",
+      "source": "student",
+      "question": "Which customers have placed more than 10 orders? Return only their names.",
+      "sql": "SELECT c.name FROM customers c JOIN orders o ON c.id = o.customer_id GROUP BY c.name HAVING COUNT(o.id) > 10",
+      "reference": "SELECT c.name FROM customers c JOIN orders o ON o.customer_id = c.id GROUP BY c.id HAVING COUNT(*) > 10",
+      "reason": "wrong on alternate database 4"
+    },
+    {
+      "step": "step_00005",
+      "template": "units_of_product",
+      "source": "student",
+      "question": "How many units of the product named 'Red Racket' have been ordered in total, across all orders? Return 0 if none (or if no such product exists).",
+      "sql": "SELECT COUNT(*) FROM order_items WHERE product_id IN (SELECT id FROM products WHERE name='Red Racket' LIMIT 1)",
+      "reference": "SELECT COALESCE(SUM(oi.quantity), 0) FROM order_items oi JOIN products p ON p.id = oi.product_id WHERE p.name = 'Red Racket'",
+      "reason": "wrong on alternate database 5"
+    },
+    {
+      "step": "step_00005",
+      "template": "units_of_product",
+      "source": "student",
+      "question": "How many units of the product named 'Red Racket' have been ordered in total, across all orders? Return 0 if none (or if no such product exists).",
+      "sql": "SELECT COUNT(*) FROM order_items i JOIN products p ON i.product_id= p.id WHERE p.name='Red Racket' AND p.category='tool'",
+      "reference": "SELECT COALESCE(SUM(oi.quantity), 0) FROM order_items oi JOIN products p ON p.id = oi.product_id WHERE p.name = 'Red Racket'",
+      "reason": "wrong on alternate database 5"
+    },
+    {
+      "step": "step_00006",
+      "template": "units_of_product",
+      "source": "student",
+      "question": "How many units of the product named 'Mega Ball' have been ordered in total, across all orders? Return 0 if none (or if no such product exists).",
+      "sql": "SELECT COUNT(*) FROM order_items oi WHERE oi.product_id=186 AND (oi.unit_price<0 OR oi.quantity>0)",
+      "reference": "SELECT COALESCE(SUM(oi.quantity), 0) FROM order_items oi JOIN products p ON p.id = oi.product_id WHERE p.name = 'Mega Ball'",
+      "reason": "wrong on alternate database 5"
+    },
+    {
+      "step": "step_00006",
+      "template": "units_of_product",
+      "source": "student",
+      "question": "How many units of the product named 'Mega Ball' have been ordered in total, across all orders? Return 0 if none (or if no such product exists).",
+      "sql": "SELECT COALESCE(SUM(oi.quantity),0) as total_units FROM order_items oi JOIN products p ON p.name='Mega Ball' JOIN orders o ON o.id=oi.order_id",
+      "reference": "SELECT COALESCE(SUM(oi.quantity), 0) FROM order_items oi JOIN products p ON p.id = oi.product_id WHERE p.name = 'Mega Ball'",
+      "reason": "wrong on alternate database 5"
+    },
+    {
+      "step": "step_00007",
+      "template": "priciest_in_cat",
+      "source": "student",
+      "question": "What is the name of the most expensive product in the Books category?",
+      "sql": "SELECT p.name FROM products p JOIN orders o JOIN order_items oi ON o.id=OI.order_id WHERE p.category LIKE '%Books%' ORDER BY p.price DESC LIMIT 1",
+      "reference": "SELECT name FROM products WHERE category = 'Books' ORDER BY price DESC LIMIT 1",
+      "reason": "error on database 5: OperationalError: interrupted"
+    },
+    {
+      "step": "step_00007",
+      "template": "products_never_ordered_by_year",
+      "source": "student",
+      "question": "Which products were never ordered in 2025? Return only the product names.",
+      "sql": "SELECT name FROM products WHERE id NOT IN (SELECT product_id FROM order_items ooi)",
+      "reference": "SELECT name FROM products WHERE id NOT IN (SELECT oi.product_id FROM order_items oi JOIN orders o ON oi.order_id = o.id WHERE o.order_date >= '2025-01-01' AND o.order_date <= '2025-12-31')",
+      "reason": "wrong on alternate database 5"
+    },
+    {
+      "step": "step_00008",
+      "template": "frequent_customers",
+      "source": "student",
+      "question": "Which customers have placed more than 12 orders? Return only their names.",
+      "sql": "SELECT DISTINCT c.name FROM customers c JOIN orders o ON o.customer_id=c.id GROUP BY c.name HAVING COUNT(*)>12",
+      "reference": "SELECT c.name FROM customers c JOIN orders o ON o.customer_id = c.id GROUP BY c.id HAVING COUNT(*) > 12",
+      "reason": "wrong on alternate database 4"
+    },
+    {
+      "step": "step_00008",
+      "template": "frequent_customers",
+      "source": "student",
+      "question": "Which customers have placed more than 12 orders? Return only their names.",
+      "sql": "SELECT DISTINCT c.name FROM customers c JOIN orders o ON o.customer_id=c.id Group By name HAVING COUNT(*)>12",
+      "reference": "SELECT c.name FROM customers c JOIN orders o ON o.customer_id = c.id GROUP BY c.id HAVING COUNT(*) > 12",
+      "reason": "wrong on alternate database 4"
+    },
+    {
+      "step": "step_00008",
+      "template": "products_never_ordered_in_country",
+      "source": "student",
+      "question": "Which products have never been ordered by customers from UK? Return only the product names .",
+      "sql": "SELECT name FROM products WHERE id NOT IN (SELECT DISTINCT product_id FROM order_items)",
+      "reference": "SELECT name FROM products WHERE name NOT IN (SELECT p.name FROM order_items oi JOIN orders o ON oi.order_id = o.id JOIN customers c ON o.customer_id = c.id JOIN products p ON oi.product_id = p.id WHERE c.country = 'UK')",
+      "reason": "wrong on alternate database 5"
+    },
+    {
+      "step": "step_00008",
+      "template": "top_spenders",
+      "source": "student",
+      "question": "Who are the top 5 customers by total amount spent (sum of quantity * unit_price) on orders that were not cancelled? Return only their names.",
+      "sql": "SELECT c.name FROM customers c JOIN orders o ON o.customer_id=c.id JOIN order_items oi ON o.id=oi.order_id WHERE o.status!='cancelled' GROUP BY c.name ORDER BY SUM(oi.quantity*oi.unit_price) DESC LIMIT 5",
+      "reference": "SELECT c.name FROM customers c JOIN orders o ON o.customer_id = c.id JOIN order_items oi ON oi.order_id = o.id WHERE o.status != 'cancelled' GROUP BY c.id ORDER BY SUM(oi.quantity * oi.unit_price) DESC LIMIT 5",
+      "reason": "wrong on alternate database 4"
+    },
+    {
+      "step": "step_00008",
+      "template": "cheap_product_rich_categories",
+      "source": "student",
+      "question": "Which product categories have more than 2 products priced below 30? Return the category and the number of such products.",
+      "sql": "SELECT category, COUNT(*) FROM products WHERE price<30 GROUP BY category HAVING COUNT(*)>2 LIMIT 1",
+      "reference": "SELECT category, COUNT(*) FROM products WHERE price < 30 GROUP BY category HAVING COUNT(*) > 2",
+      "reason": "wrong on alternate database 5"
+    }
+  ]
+}

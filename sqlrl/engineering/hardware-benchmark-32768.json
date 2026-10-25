@@ -1,0 +1,38 @@
+{
+  "hardware": {
+    "resource_limit": 499000,
+    "max_buffer_length": 22613000192,
+    "architecture": "applegpu_g15s",
+    "memory_size": 38654705664,
+    "max_recommended_working_set_size": 30150672384,
+    "device_name": "Apple M3 Pro"
+  },
+  "verifier_version": "sql-v2.1",
+  "protocol_version": "submit-sql-v2",
+  "episodes": 128,
+  "adapter": "runs/verifier_v2_smoke/final",
+  "swap_mib_before": 1224.12,
+  "swap_mib_after": 3447.75,
+  "measurements": [
+    {
+      "phase": "rollout",
+      "gen_batch": 64,
+      "episodes": 128,
+      "gen_tokens": 6875,
+      "seconds": 13.798972845077515,
+      "tokens_per_second": 498.22548947565383,
+      "peak_mem_gib": 4.863177113234997,
+      "correct": 105
+    },
+    {
+      "phase": "gradient",
+      "micro_tokens": 32768,
+      "seconds": 120.83789004199934,
+      "tokens": 6875,
+      "tokens_per_second": 56.89440619668609,
+      "loss": 0.012177666681463068,
+      "grad_norm": 0.2257475107908249,
+      "peak_mem_gib": 15.597055906429887
+    }
+  ]
+}

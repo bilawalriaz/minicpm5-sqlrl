@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>%VITE_APP_NAME%</title>
+    <meta name="description" content="A fast, accessible admin dashboard." />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#121212" media="(prefers-color-scheme: dark)" />
+    <meta name="color-scheme" content="light dark" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="%VITE_APP_NAME%" />
+    <meta property="og:title" content="%VITE_APP_NAME%" />
+    <meta property="og:description" content="A fast, accessible admin dashboard." />
+    <meta name="twitter:card" content="summary" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <!-- Apply the saved (or OS) theme before first paint to avoid a flash. Keep in sync with theme-toggle.tsx. -->
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem("boardui:theme");
+          if (t !== "dark" && t !== "light") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+          if (t === "dark") document.documentElement.classList.add("dark");
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <noscript>This app needs JavaScript enabled to run.</noscript>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

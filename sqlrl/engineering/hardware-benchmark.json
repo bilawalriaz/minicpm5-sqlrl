@@ -1,0 +1,66 @@
+{
+  "hardware": {
+    "resource_limit": 499000,
+    "max_buffer_length": 22613000192,
+    "architecture": "applegpu_g15s",
+    "memory_size": 38654705664,
+    "max_recommended_working_set_size": 30150672384,
+    "device_name": "Apple M3 Pro"
+  },
+  "verifier_version": "sql-v2.1",
+  "protocol_version": "submit-sql-v2",
+  "episodes": 128,
+  "adapter": "runs/verifier_v2_smoke/final",
+  "measurements": [
+    {
+      "phase": "rollout",
+      "gen_batch": 16,
+      "episodes": 128,
+      "gen_tokens": 7011,
+      "seconds": 26.866074085235596,
+      "tokens_per_second": 260.96109084478906,
+      "peak_mem_gib": 4.562992122024298,
+      "correct": 105
+    },
+    {
+      "phase": "rollout",
+      "gen_batch": 32,
+      "episodes": 128,
+      "gen_tokens": 7354,
+      "seconds": 25.304367780685425,
+      "tokens_per_second": 290.6217639475362,
+      "peak_mem_gib": 4.600286923348904,
+      "correct": 106
+    },
+    {
+      "phase": "rollout",
+      "gen_batch": 64,
+      "episodes": 128,
+      "gen_tokens": 6875,
+      "seconds": 13.833484888076782,
+      "tokens_per_second": 496.9825069838787,
+      "peak_mem_gib": 4.8631770219653845,
+      "correct": 105
+    },
+    {
+      "phase": "gradient",
+      "micro_tokens": 8192,
+      "seconds": 113.79466374999902,
+      "tokens": 7011,
+      "tokens_per_second": 61.61097338802111,
+      "loss": -0.0031578813192933153,
+      "grad_norm": 0.18804560601711273,
+      "peak_mem_gib": 5.8755012936890125
+    },
+    {
+      "phase": "gradient",
+      "micro_tokens": 16384,
+      "seconds": 115.31416808300128,
+      "tokens": 7011,
+      "tokens_per_second": 60.79912049448768,
+      "loss": -0.0031948723478130905,
+      "grad_norm": 0.1915353238582611,
+      "peak_mem_gib": 9.560399632900953
+    }
+  ]
+}

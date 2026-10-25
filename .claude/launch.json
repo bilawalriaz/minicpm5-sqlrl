@@ -1,0 +1,6 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "dashboard", "runtimeExecutable": "python3", "runtimeArgs": ["/Users/bilawalriaz/minicpm5-sqlrl/sqlrl/serve.py", "--port", "8000"], "port": 8000 }
+  ]
+}

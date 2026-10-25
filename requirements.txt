@@ -1,0 +1,8 @@
+# Validated runtime: Python 3.13 on Apple Silicon.
+mlx==0.31.1
+mlx-metal==0.31.1
+mlx-lm==0.31.1
+transformers==5.15.0
+openai==2.13.0
+huggingface-hub==1.14.0
+pytest==9.0.2

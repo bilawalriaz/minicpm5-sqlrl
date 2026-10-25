@@ -1,0 +1,218 @@
+/* ---------------------------------------------------------------------------
+ * Single CSS entry point (imported once in src/main.tsx).
+ *
+ * Two component systems share one theme:
+ *   1. BoardUI (src/styles/*) owns Tailwind, the colour primitives, the
+ *      semantic tokens (text-text-primary, bg-background-*, chart-*), the
+ *      composite type scale (text-body-medium …) and the `.dark` variant.
+ *   2. coss ui (src/components/ui/*) uses shadcn-style tokens (bg-background,
+ *      text-foreground, bg-primary, border-border …). Below, those tokens are
+ *      *bridged* onto BoardUI's semantic tokens, so both systems flip together
+ *      under `.dark` and re-brand together when you change the accent ramp.
+ *
+ * To re-brand: change the `--color-accent-*` ramp in src/styles/theme.css
+ * (or override it here). Everything else follows.
+ * --------------------------------------------------------------------------- */
+
+@import "./styles/globals.css";
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/geist-mono";
+
+/* coss ui token → Tailwind utility mapping */
+@theme inline {
+  --animate-skeleton: skeleton 2s -1s infinite linear;
+  --animate-caret-blink: 1s ease-out infinite caret-blink;
+  --animate-toast-success-odd: toast-success-odd 0.32s cubic-bezier(0.5, 1, 0.89, 1);
+  --animate-toast-success-even: toast-success-even 0.32s cubic-bezier(0.5, 1, 0.89, 1);
+  --animate-toast-error-odd: toast-error-odd 0.28s cubic-bezier(0.5, 1, 0.89, 1);
+  --animate-toast-error-even: toast-error-even 0.28s cubic-bezier(0.5, 1, 0.89, 1);
+
+  --font-heading: var(--font-sans);
+
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar: var(--sidebar);
+  --color-code-highlight: var(--code-highlight);
+  --code-foreground: var(--code-foreground);
+  --color-code: var(--code);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-ring: var(--ring);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-input: var(--input);
+  --color-foreground: var(--foreground);
+  --color-destructive: var(--destructive);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-border: var(--border);
+  --color-background: var(--background);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-warning: var(--warning);
+  --color-success-foreground: var(--success-foreground);
+  --color-success: var(--success);
+  --color-info-foreground: var(--info-foreground);
+  --color-info: var(--info);
+  --color-destructive-foreground: var(--destructive-foreground);
+
+  /* coss radius scale; 2xl/3xl stay at Tailwind defaults because BoardUI
+   * cards are specced at 16px / 24px. */
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+
+  @keyframes skeleton {
+    to {
+      background-position: -200% 0;
+    }
+  }
+  @keyframes caret-blink {
+    0%, 70%, to { opacity: 1; }
+    20%, 50% { opacity: 0; }
+  }
+  @keyframes toast-success-odd {
+    0% { scale: 1; }
+    30% { scale: 1.025; }
+    60% { scale: 0.99; }
+    100% { scale: 1; }
+  }
+  @keyframes toast-success-even {
+    0% { scale: 1; }
+    30% { scale: 1.025; }
+    60% { scale: 0.99; }
+    100% { scale: 1; }
+  }
+  @keyframes toast-error-odd {
+    0% { translate: 0 0; }
+    25% { translate: -3px 0; }
+    50% { translate: 3px 0; }
+    75% { translate: -3px 0; }
+    100% { translate: 0 0; }
+  }
+  @keyframes toast-error-even {
+    0% { translate: 0 0; }
+    25% { translate: -3px 0; }
+    50% { translate: 3px 0; }
+    75% { translate: -3px 0; }
+    100% { translate: 0 0; }
+  }
+}
+
+:root {
+  /* Font families consumed by BoardUI's --font-sans / --font-mono. */
+  --font-inter: "Inter Variable";
+  --font-mono-source: "Geist Mono Variable";
+
+  /* Accessibility: BoardUI's grey text and keyboard hints fall below WCAG AA
+   * (4.5:1) on its grey surfaces. These overrides pass on every surface
+   * (white, neutral-100, neutral-200). Verified with axe-core. */
+  --color-text-secondary: var(--color-neutral-600);
+  --color-text-tertiary: color-mix(in srgb, var(--color-neutral-500) 50%, var(--color-neutral-600));
+  --color-kbd-foreground: var(--color-neutral-700);
+
+  /* Bridged onto BoardUI semantic tokens (these flip with .dark on their own). */
+  --background: var(--color-background-full);
+  --foreground: var(--color-text-primary);
+  --card: var(--color-background-primary-default);
+  --card-foreground: var(--color-text-primary);
+  --popover: var(--color-background-primary-default);
+  --popover-foreground: var(--color-text-primary);
+  --primary: var(--color-accent-600);
+  --primary-foreground: var(--color-white);
+  --secondary-foreground: var(--color-text-primary);
+  --accent-foreground: var(--color-text-primary);
+  --muted-foreground: var(--color-text-secondary);
+  --border: var(--color-border-button-default);
+  --ring: var(--color-border-focus-ring);
+  --code-foreground: var(--foreground);
+  --radius: 0.625rem;
+
+  /* coss-only tokens */
+  --destructive: var(--color-red-500);
+  --destructive-foreground: var(--color-red-700);
+  --info: var(--color-blue-500);
+  --info-foreground: var(--color-blue-700);
+  --success: var(--color-emerald-500);
+  --success-foreground: var(--color-emerald-700);
+  --warning: var(--color-amber-500);
+  --warning-foreground: var(--color-amber-700);
+  --accent: --alpha(var(--color-black) / 4%);
+  --secondary: --alpha(var(--color-black) / 4%);
+  --muted: --alpha(var(--color-black) / 4%);
+  --input: --alpha(var(--color-black) / 10%);
+  --code: var(--color-white);
+  --code-highlight: --alpha(var(--color-black) / 4%);
+  --sidebar: var(--color-background-secondary-default);
+  --sidebar-foreground: var(--color-text-secondary);
+  --sidebar-primary: var(--color-accent-600);
+  --sidebar-primary-foreground: var(--color-white);
+  --sidebar-accent: var(--color-background-secondary-hover);
+  --sidebar-accent-foreground: var(--color-text-primary);
+  --sidebar-border: var(--color-border-button-default);
+  --sidebar-ring: var(--color-border-focus-ring);
+}
+
+.dark {
+  --color-text-secondary: var(--color-neutral-400);
+  --color-text-tertiary: var(--color-neutral-400);
+  --color-kbd-foreground: var(--color-neutral-200);
+
+  /* --primary stays accent-600 in dark: white on accent-500 is only 3.8:1. */
+
+  --destructive: color-mix(in srgb, var(--color-red-500) 90%, var(--color-white));
+  --destructive-foreground: var(--color-red-400);
+  --info-foreground: var(--color-blue-400);
+  --success-foreground: var(--color-emerald-400);
+  --warning-foreground: var(--color-amber-400);
+  --accent: --alpha(var(--color-white) / 6%);
+  --secondary: --alpha(var(--color-white) / 6%);
+  --muted: --alpha(var(--color-white) / 6%);
+  --input: --alpha(var(--color-white) / 10%);
+  --code: color-mix(in srgb, var(--background) 98%, var(--color-white));
+  --code-highlight: --alpha(var(--color-white) / 4%);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    @apply font-sans;
+  }
+  code,
+  kbd,
+  samp,
+  pre {
+    font-family: var(--font-mono);
+  }
+  /* Visible keyboard focus everywhere, without showing rings on mouse click. */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+}
+
+/* Respect users who ask for less motion. Components may still opt in to
+ * essential motion (e.g. progress) by overriding this locally. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
