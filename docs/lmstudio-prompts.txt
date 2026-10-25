@@ -1,0 +1,29 @@
+1. How many distinct products have been ordered by customers living in Austin?
+   Expected: 40  (test set, 88% fine-tuned)
+
+2. How many customers living in Berlin have placed at least one order but never had an order with status 'shipped'?
+   Expected: 1  (test set, 67%)
+
+3. How many Books products cost more than the average price of all products?
+   Expected: 3  (test set, 77%)
+
+4. What is the most recent signup date among customers from France? Return the date.
+   Expected: 2024-11-17  (test set, 69%)
+
+5. Which city in France has the most orders from its customers? Return only the city.
+   Expected: Paris  (test set, 47%)
+
+6. How many customers spent more than 2000 in total (sum of quantity * unit_price) on shipped orders?
+   Expected: 167  (test set, 19%: hard)
+
+7. In 2023, which month had the most orders? Return only the month as a two-digit string such as '07'.
+   Expected: 02  (test set, 0%: still fails)
+
+8. What was the total revenue (sum of quantity * unit_price) from shipped orders placed in 2023 by customers from France? Round to 2 decimal places.
+   Expected: 49016.91  (check set, 95%)
+
+9. How many customers from Japan have never placed an order?
+   Expected: 1  (check set, 91%)
+
+10. Who are the top 3 customers by total amount spent (sum of quantity * unit_price) on orders that were not cancelled? Return only their names.
+   Expected: Zara Evans; Uma Khan; Victor Novak  (trained type, 88%)
