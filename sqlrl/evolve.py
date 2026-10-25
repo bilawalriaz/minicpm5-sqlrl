@@ -23,7 +23,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 import env
 from curate import DB
-from teacher import Teacher, cost_of, make_client, session_header
+import httpx
+
+from teacher import BASE_URL, Teacher, _api_key, cost_of, make_client, session_header
 
 TABLE = """
 CREATE TABLE IF NOT EXISTS templates (
@@ -64,7 +66,7 @@ SQL uses ROUND(x, 2)), and "return 0 if none" when an aggregate could be empty (
 - Exactly one correct answer: never ORDER BY ... LIMIT on a value that can tie, such as a count.
 - One SQLite SELECT statement. Dates are text 'YYYY-MM-DD'.
 - tier: 1 = one table, 2 = a join or grouping, 3 = several of those combined.
-
+{difficulty}
 Reply with JSON only:
 {{"templates": [{{"name": "snake_case_name", "tier": 2, "skills": ["{skill}", ...], \
 "question": "...", "sql": "...", "params": {{"placeholder": [...]}}}}]}}
@@ -101,23 +103,48 @@ def examples(skill):
         if skill in skills and name not in env.HELDOUT_TEMPLATES:
             q, sql = env.TEMPLATES[name][1](rng)
             lines.append(f"- {name}: {q}\n  SQL: {sql}")
-    return "\n".join(lines) or "(none yet)"
+    # Generated templates accumulate; a sample keeps the prompt short and varied.
+    return "\n".join(rng.sample(lines, min(8, len(lines)))) or "(none yet)"
 
 
-def propose(client, model, skill, n):
-    prompt = PROMPT.format(
-        schema=env.SCHEMA, values=value_lists(), skill=skill, description=env.SKILL_DESCRIPTIONS[skill],
-        examples=examples(skill), n=n, skills=sorted(env.SKILL_DESCRIPTIONS),
-    )
+# Burst prompts ask for harder compositions when training groups stop carrying signal.
+HARD = """- Make each question harder than the existing templates: tier 3, combining the target skill with at \
+least two other listed skills, and needing a subquery or a derived table. Keep exactly one correct answer."""
+
+
+def complete(client, model, prompt, max_tokens=8192):
+    """Returns (text, dollars). Claude models use the gateway's Messages endpoint."""
+    if model.startswith("claude-"):
+        resp = httpx.post(f"{BASE_URL}/messages", timeout=180, json={
+            "model": model, "max_tokens": max_tokens, "messages": [{"role": "user", "content": prompt}]},
+            headers={"x-api-key": _api_key(), "anthropic-version": "2023-06-01",
+                     "User-Agent": "sqlrl-teacher/0.1", **session_header()})
+        resp.raise_for_status()
+        body = resp.json()
+        if body.get("stop_reason") == "max_tokens":
+            raise ValueError(f"{model} reply hit the {max_tokens}-token limit")
+        text = "".join(part.get("text", "") for part in body["content"])
+        return text, (body["usage"].get("opencode") or {}).get("list_cost", 0.0)
     resp = client.chat.completions.create(
         model=model, messages=[{"role": "user", "content": prompt}],
-        reasoning_effort="low", max_tokens=4096, extra_headers=session_header(),
+        reasoning_effort="low", max_tokens=max_tokens, extra_headers=session_header(),
     )
-    match = re.search(r"\{.*\}", resp.choices[0].message.content or "", re.S)
-    specs = json.loads(match.group(0)).get("templates", []) if match else []
+    return resp.choices[0].message.content or "", cost_of(resp)
+
+
+def propose(client, model, skill, n, hard=False):
+    prompt = PROMPT.format(
+        schema=env.SCHEMA, values=value_lists(), skill=skill, description=env.SKILL_DESCRIPTIONS[skill],
+        examples=examples(skill), n=n, skills=sorted(env.SKILL_DESCRIPTIONS), difficulty=HARD if hard else "",
+    )
+    text, cost = complete(client, model, prompt)
+    start = text.find("{")
+    # raw_decode reads the first JSON object and ignores trailing prose or code fences.
+    specs = json.JSONDecoder().raw_decode(text, start)[0].get("templates", []) if start >= 0 else []
     for spec in specs:
-        spec["target_skill"] = skill
-    return specs, cost_of(resp)
+        if isinstance(spec, dict):
+            spec["target_skill"], spec["model"] = skill, model
+    return [spec for spec in specs if isinstance(spec, dict)], cost
 
 
 def check_structure(spec):
@@ -206,6 +233,35 @@ def ablations(sql):
     return out
 
 
+def answer_values(rows):
+    return {env._norm(v) for row in rows for v in row if v is not None}
+
+
+def heldout_values(cons):
+    """Values in each held-out question's answer, per training fixture."""
+    return [(q, [answer_values(env.execute(con, sql)[0]) for con in cons])
+            for name in env.HELDOUT_TEMPLATES for q, sql in env._questions(name)]
+
+
+def _distinctive(v):
+    """Values unlikely to recur by chance: non-integer numbers and dates. Counts, ids and
+    category names appear in many unrelated answers."""
+    return (isinstance(v, float) and v != int(v)) or (isinstance(v, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", v))
+
+
+def contained(question_values, heldout):
+    """A held-out question whose answer contains this one's values on every fixture (the
+    question asks for part of a held-out answer), or whose distinctive answer values all
+    appear in this one's answer (the question's answer includes the held-out answer)."""
+    for q, held in heldout:
+        if all(a and a <= b for a, b in zip(question_values, held)) and any(a - {0, 1} for a in question_values):
+            return q
+        if all(b and b <= a for a, b in zip(question_values, held)) and all(
+                any(_distinctive(v) for v in b) for b in held):
+            return q
+    return None
+
+
 def normalise(sql):
     return re.sub(r"\s+", " ", sql.strip().rstrip(";")).lower()
 
@@ -223,7 +279,7 @@ def validate(spec, teacher, known_sql):
         if combinations > 256:
             return False, "more than 256 parameter combinations; narrow the template"
         questions, effective = {}, set()
-        held_out = eval_signatures(cons)
+        held_out, held_values = eval_signatures(cons), heldout_values(cons)
         for values_tuple in itertools.product(*(spec["params"][k] for k in keys)):
             values = dict(zip(keys, values_tuple))
             q, sql = spec["question"].format(**values), spec["sql"].format(**values)
@@ -241,6 +297,8 @@ def validate(spec, teacher, known_sql):
                 return False, f"same answer on every database, so a hard-coded value would pass: {q}"
             if tuple(results) in held_out:
                 return False, f"same results as an evaluation question: {q}"
+            if overlap := contained([answer_values(env.execute(con, sql)[0]) for con in cons], held_values):
+                return False, f"answers overlap the held-out question {overlap!r}: {q}"
             for label, variant in ablations(spec["sql"]).items():
                 rows = [env.execute(con, variant.format(**values))[0] for con in cons]
                 if any(r is None or signature(r) != res for r, res in zip(rows, results)):
@@ -261,13 +319,24 @@ def validate(spec, teacher, known_sql):
             con.close()
 
 
-def evolve(skills, n, model="glm-5.3-flash", workers=4):
-    """Propose n templates per skill, validate them, store every verdict. Returns accepted specs."""
-    client, teacher = make_client(), Teacher(model, workers=1)
+def evolve(skills, n, model="glm-5.3-flash", workers=4, solver="glm-5.3-flash", hard=False):
+    """Propose n templates per skill, validate them, store every verdict. Returns accepted specs.
+    model may be a comma-separated list; skills rotate through it. The solver that checks
+    proposals should differ from the proposers, so acceptance is not one model agreeing with itself."""
+    models = model.split(",")
+    client, teacher = make_client(), Teacher(solver, workers=1)
     con = connect()
     known_sql = {normalise(sql) for (sql,) in con.execute("SELECT sql FROM templates WHERE status='accepted'")}
+
+    def safe_propose(i, skill):
+        try:
+            return propose(client, models[i % len(models)], skill, n, hard)
+        except Exception as exc:  # one model's API failure should not discard the others' proposals
+            print(f"  evolve: {models[i % len(models)]} failed for {skill}: {type(exc).__name__}: {str(exc)[:120]}")
+            return [], 0.0
+
     with ThreadPoolExecutor(workers) as pool:
-        proposals = list(pool.map(lambda s: propose(client, model, s, n), skills))
+        proposals = list(pool.map(safe_propose, range(len(skills)), skills))
         specs = [spec for batch, _ in proposals for spec in batch]
         verdicts = list(pool.map(lambda spec: validate(spec, teacher, known_sql), specs))
     accepted = []
@@ -282,7 +351,7 @@ def evolve(skills, n, model="glm-5.3-flash", workers=4):
             " model, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (str(spec.get("name")), spec["target_skill"], json.dumps(spec.get("skills")), spec.get("tier") or 0,
              str(spec.get("question")), str(spec.get("sql")), json.dumps(spec.get("params")),
-             "accepted" if ok else "rejected", reason, model, time.time()),
+             "accepted" if ok else "rejected", reason, spec.get("model", model), time.time()),
         )
     con.commit()
     con.close()
@@ -298,7 +367,8 @@ def revalidate():
     solved = SimpleNamespace(solve=lambda task: {"correct": True})
     for name, target, skills, tier, question, sql, params in con.execute(
             "SELECT name, target_skill, skills, tier, question, sql, params FROM templates WHERE status='accepted'").fetchall():
-        spec = {"name": name + "_recheck", "target_skill": target, "skills": json.loads(skills), "tier": tier,
+        # A placeholder name: the stored name is already registered and may be at the length limit.
+        spec = {"name": "revalidation_candidate", "target_skill": target, "skills": json.loads(skills), "tier": tier,
                 "question": question, "sql": sql, "params": json.loads(params)}
         ok, reason = validate(spec, solved, set())
         if not ok:
@@ -323,9 +393,12 @@ def load_accepted():
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--skills", help="comma-separated, e.g. anti_join,having")
+    ap.add_argument("--skills", help="comma-separated, e.g. anti_join,having, or all")
+    ap.add_argument("--rounds", type=int, default=1, help="repeat proposal and validation")
     ap.add_argument("--n", type=int, default=2, help="templates to propose per skill")
-    ap.add_argument("--model", default="glm-5.3-flash")
+    ap.add_argument("--model", default="glm-5.3-flash", help="proposer, or a comma-separated list to rotate")
+    ap.add_argument("--solver", default="glm-5.3-flash", help="model that must solve proposals without the reference")
+    ap.add_argument("--hard", action="store_true", help="ask for tier-3 compositions with subqueries")
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--revalidate", action="store_true", help="recheck accepted templates against the current data checks")
     args = ap.parse_args()
@@ -336,9 +409,11 @@ if __name__ == "__main__":
                 "SELECT status, name, target_skill, reason, question FROM templates ORDER BY id"):
             print(f"{status:8s} {name} [{skill}] {reason}\n         {q}")
     else:
-        load_accepted()  # so names and examples include earlier generations
-        t0 = time.time()
-        accepted, stats = evolve(args.skills.split(","), args.n, args.model)
-        print(f"{stats['accepted']} of {stats['proposed']} accepted in {time.time() - t0:.0f}s, ${stats['spent']:.4f}")
-        for spec in accepted:
-            print(f"  + {spec['name']} {spec['skills']}: {spec['question']}")
+        skills = sorted(env.SKILL_DESCRIPTIONS) if args.skills == "all" else args.skills.split(",")
+        for _ in range(args.rounds):
+            load_accepted()  # so names and examples include earlier generations
+            t0 = time.time()
+            accepted, stats = evolve(skills, args.n, args.model, solver=args.solver, hard=args.hard)
+            print(f"{stats['accepted']} of {stats['proposed']} accepted in {time.time() - t0:.0f}s, ${stats['spent']:.4f}")
+            for spec in accepted:
+                print(f"  + {spec['name']} {spec['skills']}: {spec['question']}")

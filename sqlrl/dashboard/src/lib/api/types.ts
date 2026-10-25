@@ -94,6 +94,8 @@ export interface EvalRow {
   by_split?: Record<string, number>;
   outcomes: Partial<Record<Outcome, number>>;
   seconds: number;
+  /** Check rows only: which checkpoint was scored, e.g. "initial_step_00000" or "selected_step_00120". */
+  checkpoint?: string | null;
 }
 
 export interface RunConfig {
@@ -120,6 +122,10 @@ export interface RunDetail {
   status: RunStatus | null;
   metrics: StepMetrics[];
   evals: EvalRow[];
+  /** Check-set evaluations, from eval-v3: at the start, then on the final and selected checkpoints. */
+  checks: EvalRow[];
+  /** Written when training ends: the checkpoint with the best smoothed selection score. */
+  selected: { step: number; smoothed_selection_score: number } | null;
 }
 
 export interface Segment {

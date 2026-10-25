@@ -79,3 +79,59 @@ def test_builtin_references_have_no_vacuous_clause():
                     if any(r is None or evolve.signature(r) != b for r, b in zip(rows, base)):
                         effective.add(i)
             assert effective == set(range(len(evolve.ablations(pairs[0][1])))), name
+
+
+def test_revalidation_keeps_valid_templates_with_long_names(tmp_path, monkeypatch):
+    import sqlite3
+    db = tmp_path / 'templates.db'
+    monkeypatch.setattr(evolve, 'DB', db)
+    con = evolve.connect()
+    good = spec()
+    con.execute("INSERT INTO templates (name, target_skill, skills, tier, question, sql, params, status, reason, model, created_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?)", ('a' * 41, 'filter', '["filter", "aggregate"]', 1, good['question'],
+                                                   good['sql'], '{"city": ["London", "Paris", "Tokyo", "Seattle"]}',
+                                                   'accepted', 'ok', 'm', 0))
+    con.commit()
+    evolve.revalidate()
+    assert sqlite3.connect(db).execute("SELECT status FROM templates").fetchone()[0] == 'accepted'
+
+
+def test_part_of_a_heldout_answer_is_rejected_but_unrelated_id_lists_are_not():
+    teacher = SimpleNamespace(solve=lambda task: {'correct': True})
+    part = spec()
+    part.update(question="How many orders with status '{status}' were placed in {year}?",
+                params={'status': ['shipped', 'pending'], 'year': [2023, 2024]},
+                sql="SELECT COUNT(*) FROM orders WHERE status = '{status}' AND order_date LIKE '{year}-%'")
+    ok, why = evolve.validate(part, teacher, set())
+    assert not ok and 'overlap the held-out question' in why, why
+    ids = spec()
+    ids.update(question="List the ids of shipped orders placed in {year}.", params={'year': [2023, 2024]},
+               sql="SELECT id FROM orders WHERE status = 'shipped' AND order_date LIKE '{year}-%'")
+    ok, why = evolve.validate(ids, teacher, set())
+    assert ok, why
+
+
+def test_proposers_rotate_and_one_failure_keeps_the_rest(tmp_path, monkeypatch):
+    monkeypatch.setattr(evolve, 'DB', tmp_path / 'templates.db')
+    calls = []
+
+    def propose(client, model, skill, n, hard=False):
+        calls.append((model, skill, hard))
+        if model == 'broken':
+            raise RuntimeError('gateway error')
+        return [], 0.0
+
+    monkeypatch.setattr(evolve, 'propose', propose)
+    monkeypatch.setattr(evolve, 'make_client', lambda: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(evolve, 'Teacher', lambda model, workers: SimpleNamespace(spent=0.0, close=lambda: None, model=model))
+    accepted, stats = evolve.evolve(['filter', 'join', 'having'], 2, 'a,broken', solver='s', hard=True, workers=1)
+    assert sorted(calls) == sorted([('a', 'filter', True), ('broken', 'join', True), ('a', 'having', True)])
+    assert accepted == [] and stats['proposed'] == 0
+
+
+def test_proposal_parsing_ignores_fences_and_trailing_text(monkeypatch):
+    reply = 'Here you go:\n```json\n{"templates": [{"name": "x_y"}]}\n```\nNotes: {not json}'
+    monkeypatch.setattr(evolve, 'complete', lambda client, model, prompt: (reply, 0.01))
+    monkeypatch.setattr(evolve, 'value_lists', lambda: '')
+    specs, cost = evolve.propose(None, 'm', 'filter', 1)
+    assert specs == [{'name': 'x_y', 'target_skill': 'filter', 'model': 'm'}] and cost == 0.01

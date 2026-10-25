@@ -19,8 +19,8 @@ def test_eval_uses_binary_outcomes_for_every_accuracy(monkeypatch):
     log = SimpleNamespace(status=lambda **kw: None, write=lambda *a: None,
                           append=lambda name, row: rows.append(row))
     rows = []
-    args = SimpleNamespace(eval_per_template=1, eval_k=1, temp=1.0, max_turns=5,
-                           max_tokens=256, hide_schema=False, gen_batch=1)
+    args = SimpleNamespace(eval_per_template=1, eval_k=1, temp=1.0, max_turns=5, eval_heldout_questions=1,
+                           eval_heldout_k=1, max_tokens=256, hide_schema=False, gen_batch=1)
     train.run_eval(SimpleNamespace(eval=lambda: None), None, args, log, 0)
     row = rows[0]
     assert row['pass1'] == row['by_tier']['1'] == row['by_template']['example'] == row['by_split']['reserved_params'] == 0.5
@@ -94,3 +94,30 @@ def test_signal_during_update_is_deferred_until_it_finishes():
     assert finished == [True]
     with pytest.raises(train.Stop):
         signals.handle(15, None)
+
+
+def test_selection_smooths_and_stops_without_improvement():
+    sel = train.Selection(patience=2, drop=0.15, drop_evals=0)
+    assert sel.add(0, 0.9, candidate=False) is None  # the untrained start is never selected
+    for step, score in [(10, 0.4), (20, 0.6), (30, 0.8), (40, 0.5)]:
+        assert sel.add(step, score) is None
+    # Smoothed: 20 -> 0.5, 30 -> 0.7, 40 -> 0.65. A single high score at 10 does not win.
+    assert sel.best() == (30, pytest.approx(0.7))
+    assert 'no selection improvement in 2' in sel.add(50, 0.6)
+
+
+def test_selection_stops_after_sustained_drop():
+    sel = train.Selection(patience=0, drop=0.15, drop_evals=2)
+    for step, score in [(10, 0.7), (20, 0.5)]:
+        assert sel.add(step, score) is None
+    assert 'below its best for 2' in sel.add(30, 0.5)
+
+
+def test_burst_due_on_sustained_low_signal_with_cooldown():
+    assert not train.burst_due([2, 2, 2, 2], 4, None, 5, 6, busy=False)        # window not full
+    assert train.burst_due([9, 2, 2, 2, 2, 2], 6, None, 5, 6, busy=False)
+    assert not train.burst_due([2] * 6, 6, None, 5, 6, busy=True)               # generation already running
+    assert not train.burst_due([2] * 8, 8, 6, 5, 6, busy=False)                 # cooldown
+    assert train.burst_due([2] * 11, 11, 6, 5, 6, busy=False)
+    assert not train.burst_due([7] * 6, 6, None, 5, 6, busy=False)
+    assert not train.burst_due([2] * 6, 6, None, 5, 0, busy=False)              # disabled

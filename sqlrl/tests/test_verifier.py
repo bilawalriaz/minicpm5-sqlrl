@@ -140,10 +140,22 @@ WRONG = [
     ("orders_by_country", r"COUNT\(\*\)", "COUNT(DISTINCT c.id)"),
     ("churned", r"SELECT DISTINCT customer_id FROM orders WHERE order_date LIKE '(\d+)-%' EXCEPT",
      r"SELECT customer_id FROM orders WHERE order_date LIKE '\1-%' AND status != 'cancelled' EXCEPT"),
+    # Held-out templates.
+    ("lines_per_order_status", r"SELECT COUNT\(\*\) AS n", "SELECT SUM(oi.quantity) AS n"),
+    ("repeat_buyers_cat", r"COUNT\(DISTINCT o.id\) >= 2", "COUNT(*) >= 2"),
+    ("country_revenue_year", r"o.status = 'shipped' AND ", ""),
+    ("idle_customers_country", r"WHERE o.customer_id = c.id\)", "WHERE o.customer_id = c.id AND o.status = 'shipped')"),
+    ("status_counts_year", r"COUNT\(\*\)", "COUNT(DISTINCT customer_id)"),
+    ("large_orders", r"SUM\(quantity\)", "COUNT(*)"),
+    ("first_order_city", r"MIN\(o.order_date\)", "MIN(c.signup_date)"),
 ]
 
 # Different SQL with the reference's meaning must still pass.
 RIGHT = [
+    ("idle_customers_country", r"SELECT COUNT\(\*\) FROM customers c WHERE c.country = ('[^']+') AND NOT EXISTS.*",
+     r"SELECT COUNT(*) FROM customers c LEFT JOIN orders o ON o.customer_id = c.id WHERE c.country = \1 AND o.id IS NULL"),
+    ("large_orders", r".*HAVING SUM\(quantity\) > (\d+)\)",
+     r"SELECT COUNT(DISTINCT o.id) FROM orders o WHERE (SELECT SUM(quantity) FROM order_items WHERE order_id = o.id) > \1"),
     ("count_city", r"SELECT COUNT\(\*\) FROM customers WHERE city = ('[^']+')", r"SELECT COUNT(id) FROM customers c WHERE c.city IN (\1)"),
     ("cheap_products", r"SELECT name FROM products WHERE category = ('[^']+') AND price < (\d+)",
      r"SELECT p.name FROM products p WHERE p.price < \2 AND p.category = \1 ORDER BY p.name"),
@@ -216,9 +228,11 @@ def test_builtin_answers_differ_between_fixtures():
 
 
 def test_heldout_templates_are_never_trained():
-    tasks = env.eval_tasks(2, 1)
-    splits = {t.template: t.split for t in tasks}
-    assert {n for n, s in splits.items() if s == 'heldout_template'} == set(env.HELDOUT_TEMPLATES)
-    assert {n for n, s in splits.items() if s == 'shared_wording'} == {'avg_price_by_cat', 'never_ordered'}
+    selection = env.eval_tasks(2, 1)
+    check = env.eval_tasks(2, 1, sets=("check",))
+    assert {t.template for t in selection if t.split == 'heldout_select'} == set(env.HELDOUT_SELECT)
+    assert {t.split for t in check} == {'heldout_check'} and {t.template for t in check} == set(env.HELDOUT_CHECK)
+    assert {t.template for t in selection if t.split == 'shared_wording'} == {'avg_price_by_cat', 'never_ordered'}
+    assert not set(env.HELDOUT_SELECT) & set(env.HELDOUT_CHECK)
     trained = env.sample_tasks(2000, 3)
     assert not {t.template for t in trained} & set(env.HELDOUT_TEMPLATES)

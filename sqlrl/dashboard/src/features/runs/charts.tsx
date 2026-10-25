@@ -141,6 +141,7 @@ const BUCKETS = 8;
 
 const SPLIT_LABELS: Record<string, string> = {
   heldout_template: "Held-out templates",
+  heldout_select: "Held-out selection",
   reserved_params: "Reserved parameters",
   shared_wording: "Shared wording",
 };
@@ -316,6 +317,18 @@ export function MetricsPanel({ run }: { run: RunDetail }) {
       deltaColor: "neutral",
     },
   ];
+  const checkScore = (row: EvalRow) => row.by_split?.heldout_check ?? row.pass1;
+  const lastCheck = run.checks.at(-1);
+  if (lastCheck) {
+    const change = checkScore(lastCheck) - checkScore(run.checks[0]);
+    stats.push({
+      icon: RiFlagLine,
+      label: run.selected ? `Held-out check, step ${run.selected.step}` : "Held-out check",
+      value: checkScore(lastCheck).toFixed(3),
+      delta: lastCheck === run.checks[0] ? "baseline" : signed(change, fixed(3)),
+      deltaColor: change > 0 ? "lime" : change < 0 ? "rose" : "neutral",
+    });
+  }
 
   const rewardEma = ema(m.map((r) => r.reward_mean));
   const rows = m.map((r, i) => ({

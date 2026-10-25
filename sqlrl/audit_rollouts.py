@@ -26,7 +26,7 @@ def audit(runs, output, previous="sql-v2.1"):
     counts, by_source, examples, changed = Counter(), defaultdict(Counter), [], Counter()
     cache = {}
     with ExitStack() as stack:
-        old_suite, new_suite = fixture_set(stack, previous), fixture_set(stack, env.VERIFIER_VERSION)
+        old_suite, new_suite = fixture_set(stack, previous), fixture_set(stack, env.DATA_VERSION)
         files = [p for run in runs for p in sorted((ROOT / "runs" / run / "samples").glob("step_*.json"))]
         for path in files:
             for record in json.loads(path.read_text()):

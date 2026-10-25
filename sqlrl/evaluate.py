@@ -21,7 +21,9 @@ def main():
     ap.add_argument("--model", default=str(Path(__file__).parent.parent / "models/MiniCPM5-1B"))
     ap.add_argument("--adapter", default=None)
     ap.add_argument("--per-template", type=int, default=2, help="distinct questions per trained template; held-out templates get twice as many")
-    ap.add_argument("--k", type=int, default=8)
+    ap.add_argument("--k", type=int, default=8, help="attempts per question")
+    ap.add_argument("--sets", default="train,select", help="comma-separated: train, select, check")
+    ap.add_argument("--heldout-questions", type=int, default=4)
     ap.add_argument("--temp", type=float, default=1.0)
     ap.add_argument("--max-turns", type=int, default=5)
     ap.add_argument("--hide-schema", action="store_true")
@@ -36,7 +38,8 @@ def main():
         load_adapters(model, args.adapter)
     model.eval()
 
-    eps, stats = rollout(model, tok, env.eval_tasks(args.per_template, args.k), temp=args.temp, max_turns=args.max_turns,
+    eps, stats = rollout(model, tok, env.eval_tasks(args.per_template, args.k, sets=tuple(args.sets.split(",")),
+                                                  heldout_questions=args.heldout_questions), temp=args.temp, max_turns=args.max_turns,
                          show_schema=not args.hide_schema, batch_size=args.gen_batch, verbose=True)
 
     by_template = defaultdict(list)

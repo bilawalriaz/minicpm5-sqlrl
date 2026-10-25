@@ -54,9 +54,10 @@ positive gradient; it is not an on-policy sample from the student.
 
 ## Verifier and data
 
-The current verifier is `sql-v2.2`; the answer protocol is `submit-sql-v2`. Each
+The current verifier is `sql-v2.3`; the answer protocol is `submit-sql-v2`. Each
 submission must match the reference on four databases. Training and evaluation
-use separate groups of four databases under `data/sql-v2.2/`:
+use separate groups of four databases under `data/sql-v2.2/` (`sql-v2.3` changes
+only the instruction budget and keeps those fixtures):
 
 | Role | Contents |
 | --- | --- |
@@ -75,28 +76,36 @@ are rejected for every parameter on both splits. Equivalent rewrites (`NOT EXIST
 
 Comparison preserves column positions, duplicate rows, and text values. Row order
 is ignored. Numeric results are compared to six decimal places. Integers retain
-their full precision. Queries have an instruction budget and a 10,000-row result
-limit. Overflow returns an error; results are never silently truncated. A broken
+their full precision. Queries have a budget of 50 million SQLite instructions
+(about 18 million for a correct correlated subquery over unindexed order lines,
+under 0.1 million for the references) and a 10,000-row result limit. Overflow returns an error; results are never silently truncated. A broken
 reference query raises an error instead of grading the model. Graded SQL may not
 use `random()`, `CURRENT_TIMESTAMP` and similar functions, or the `'now'`,
 `'localtime'` and `'utc'` date modifiers.
 
 ## Evaluation
 
-Evaluation uses the evaluation databases and reports three splits:
+Evaluation (`eval-v3`) uses the evaluation databases. Ten built-in templates are
+never trained; their skills appear in other templates. They form two sets:
 
-- `heldout_template`: `signups_year`, `orders_by_country` and `best_category_year`
-  are never trained. Their skills appear in other templates. Each gets twice
-  `--eval-per-template` questions.
-- `reserved_params`: built-in parameter combinations excluded from training.
-- `shared_wording`: the two constant templates. The wording is also trained; only
-  the data is new.
+- Selection set (`heldout_select`): `signups_year`, `orders_by_country`,
+  `best_category_year`, `lines_per_order_status`, `repeat_buyers_cat`. Scored at
+  every evaluation; it chooses the checkpoint and drives early stopping.
+- Check set (`heldout_check`): `country_revenue_year`, `idle_customers_country`,
+  `status_counts_year`, `large_orders`, `first_order_city`. Scored before training
+  and on the final and selected checkpoints only, so selection does not bias it.
 
-`pass1` is attempt-weighted over all three. `by_split`, `by_template` and `by_tier`
-count correct submissions, independently of reward shaping. Full evaluation
-transcripts are saved in `runs/<name>/eval_samples/`. A checkpoint that descends
-from a run trained on every built-in template (such as `curriculum_50b`) has seen
-all of these questions, so its scores do not measure generalization.
+Each held-out template contributes `--eval-heldout-questions` questions (default 4)
+with `--eval-heldout-k` attempts (default 8). Every evaluation also scores trained
+templates: `reserved_params` (parameter combinations excluded from training,
+`--eval-per-template` questions, `--eval-k` attempts) and `shared_wording` (the two
+constant templates; only the data is new).
+
+Results go to `evals.jsonl` and check results to `checks.jsonl`. `by_split`,
+`by_template` and `by_tier` count correct submissions, independently of reward
+shaping. Full transcripts are saved in `runs/<name>/eval_samples/`. A checkpoint that
+descends from a run trained on every built-in template (such as `curriculum_50b`) has
+seen these questions, so its scores do not measure generalization.
 
 ## Generated templates
 
@@ -107,8 +116,23 @@ primary answer is not empty or NULL, the answers differ between fixtures, and th
 results differ from every evaluation question. Removing the `HAVING` clause or any
 top-level `WHERE` condition must change some answer. A solver that does not see the
 reference must answer distinct questions. Held-out templates are not shown to the
-generator. `python evolve.py --revalidate` applies the current data checks to
+generator. A generated question is rejected when, on every training fixture, its
+answer equals a held-out answer, is contained in one (one status of a per-status
+count), or contains a held-out answer's non-integer numbers or dates. Templates that
+reuse a held-out template's skills with other columns or filters are allowed. `python evolve.py --revalidate` applies the current data checks to
 templates accepted earlier.
+
+Build a template bank before a run, then let training add more:
+
+```sh
+python evolve.py --skills all --n 4 --rounds 3
+```
+
+During training, generation runs every `--evolve-every` steps for
+`--evolve-skills` skills: skills solved less than 60% of the time first, otherwise
+the skills with the fewest trainable templates. A template solved at least 95% of
+the time over 32 rollouts drops from the sampling floor (0.05) to a replay weight
+(0.01), so most of each batch comes from templates that still give signal.
 
 Previous databases and checkpoints are preserved. Template and curated-trace
 stores live inside the versioned data directory; earlier approvals are not loaded
@@ -153,8 +177,15 @@ directory and renamed when complete. Checkpoints are written every `--save-every
 steps (default 25) and at the end; evaluation runs before training, every
 `--eval-every` steps, and after the last step.
 
+Every evaluated step keeps a checkpoint. The trainer smooths the selection score
+over two consecutive evaluations and stops early after `--patience` evaluations
+without a better smoothed score (default 5), or when the score stays `--drop-stop`
+below its best for `--drop-evals` evaluations (defaults 0.15 and 3). At the end it
+writes `selected.json`, then scores the check set on the final and selected
+checkpoints.
+
 `--max-hours` stops before a step that would end after the budget, leaving time for
-the scheduled and final evaluations. A nonfinite loss or gradient skips the update;
+the scheduled evaluation, the final evaluation and the two checks. A nonfinite loss or gradient skips the update;
 `--max-nonfinite` consecutive skips (default 3) stop the run. SIGTERM or SIGINT
 during an update or a save takes effect after it completes. On any failure the
 trainer saves `interrupted_step_NNNNN/` with the weights of the last completed
@@ -172,7 +203,8 @@ The watchdog sends SIGTERM after three checks in a row over 30 GiB footprint, ov
 3 GiB swap growth, or at critical memory pressure. The monitor writes
 `runs/<name>/monitor.jsonl` every minute and sends SIGTERM if a literal answer is
 graded correct, if evaluation falls 0.15 below both the first and best results
-twice in a row, or if the status file stops changing for 45 minutes.
+twice in a row, or if the status file stops changing for 45 minutes. It records an
+alert when the selection score falls 0.15 below its best.
 
 ## Checks and inspection
 

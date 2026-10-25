@@ -9,7 +9,8 @@ trainer saves an interrupted checkpoint) when:
     evaluation for two evaluations in a row,
   - status.json has not changed for --hang-minutes while the process is alive.
 It records, without stopping: skipped nonfinite updates, high MLX peak memory,
-falling training reward, and a trainer exit without the done phase.
+falling training reward, a held-out selection score below its best, and a trainer
+exit without the done phase.
 """
 import argparse
 import json
@@ -50,6 +51,9 @@ def check(run, metrics, evals, status, args, now):
         breach = [s for s in samples if s["source"] == "student" and s["outcome"] == "correct" and s["literal"]]
         if breach:
             stop = f"step {last['step']}: {len(breach)} literal answers graded correct"
+    held = [e["by_split"]["heldout_select"] for e in evals if "heldout_select" in e.get("by_split", {})]
+    if len(held) >= 2 and held[-1] < max(held[:-1]) - args.collapse:
+        alerts.append(f"held-out selection {held[-1]:.3f}, best {max(held[:-1]):.3f}; the trainer stops early on a sustained drop")
     if len(evals) >= 3:
         best = max(e["pass1"] for e in evals[:-1])
         floor = min(best, evals[0]["pass1"]) - args.collapse

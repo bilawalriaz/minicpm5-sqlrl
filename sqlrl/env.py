@@ -18,9 +18,11 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-VERIFIER_VERSION = "sql-v2.2"
+VERIFIER_VERSION = "sql-v2.3"
 PROTOCOL_VERSION = "submit-sql-v2"
-DATA_DIR = Path(__file__).parent / "data" / VERIFIER_VERSION
+# sql-v2.3 changes only the instruction budget, so it keeps the sql-v2.2 fixtures and template store.
+DATA_VERSION = "sql-v2.2"
+DATA_DIR = Path(__file__).parent / "data" / DATA_VERSION
 DB_PATH = DATA_DIR / "train.db"
 ALT_DB_PATHS = [DATA_DIR / f"train_alt{i}.db" for i in (1, 2, 3)]
 EVAL_DB_PATH = DATA_DIR / "eval.db"
@@ -242,6 +244,28 @@ TEMPLATES = {
     "churned": (3, lambda r: (y := r.choice([2023, 2024])) and (
         f"How many customers placed at least one order in {y} but no orders in {y + 1}?",
         f"SELECT COUNT(*) FROM (SELECT DISTINCT customer_id FROM orders WHERE order_date LIKE '{y}-%' EXCEPT SELECT customer_id FROM orders WHERE order_date LIKE '{y + 1}-%')")),
+    # Held-out evaluation templates (never trained). Each combines skills that trained templates teach.
+    "lines_per_order_status": (2, lambda r: (s := r.choice(STATUSES)) and (
+        f"On average, how many order lines (rows in order_items) does an order with status '{s}' have? Round to 2 decimal places.",
+        f"SELECT ROUND(AVG(n), 2) FROM (SELECT COUNT(*) AS n FROM order_items oi JOIN orders o ON o.id = oi.order_id WHERE o.status = '{s}' GROUP BY o.id)")),
+    "repeat_buyers_cat": (3, lambda r: (c := r.choice(CATEGORIES)) and (
+        f"How many customers have placed at least two different orders that each contain a {c} product?",
+        f"SELECT COUNT(*) FROM (SELECT o.customer_id FROM orders o JOIN order_items oi ON oi.order_id = o.id JOIN products p ON p.id = oi.product_id WHERE p.category = '{c}' GROUP BY o.customer_id HAVING COUNT(DISTINCT o.id) >= 2)")),
+    "country_revenue_year": (3, lambda r: (k := r.choice(list(CITIES)), y := r.choice([2023, 2024, 2025])) and (
+        f"What was the total revenue (sum of quantity * unit_price) from shipped orders placed in {y} by customers from {k}? Round to 2 decimal places.",
+        f"SELECT ROUND(SUM(oi.quantity * oi.unit_price), 2) FROM order_items oi JOIN orders o ON o.id = oi.order_id JOIN customers c ON c.id = o.customer_id WHERE o.status = 'shipped' AND o.order_date LIKE '{y}-%' AND c.country = '{k}'")),
+    "idle_customers_country": (3, lambda r: (k := r.choice(list(CITIES))) and (
+        f"How many customers from {k} have never placed an order?",
+        f"SELECT COUNT(*) FROM customers c WHERE c.country = '{k}' AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.customer_id = c.id)")),
+    "status_counts_year": (2, lambda r: (y := r.choice([2023, 2024, 2025])) and (
+        f"For each order status, how many orders were placed in {y}? Return the status and the number of orders.",
+        f"SELECT status, COUNT(*) FROM orders WHERE order_date LIKE '{y}-%' GROUP BY status")),
+    "large_orders": (2, lambda r: (n := r.choice([8, 10, 12])) and (
+        f"How many orders contain more than {n} units in total (sum of quantity over the order's lines)?",
+        f"SELECT COUNT(*) FROM (SELECT order_id FROM order_items GROUP BY order_id HAVING SUM(quantity) > {n})")),
+    "first_order_city": (2, lambda r: (c := _city(r)) and (
+        f"On what date was the earliest order placed by a customer living in {c}? Return the date.",
+        f"SELECT MIN(o.order_date) FROM orders o JOIN customers c ON c.id = o.customer_id WHERE c.city = '{c}'")),
 }
 
 
@@ -263,6 +287,13 @@ SKILLS = {
     "top_spenders": ("multi_join", "group_by", "top_k"),
     "best_category_year": ("multi_join", "group_by", "top_k", "date_filter"),
     "churned": ("set_ops", "date_filter"),
+    "lines_per_order_status": ("join", "filter", "group_by", "aggregate", "rounding"),
+    "repeat_buyers_cat": ("multi_join", "group_by", "having", "distinct"),
+    "country_revenue_year": ("multi_join", "date_filter", "aggregate", "rounding"),
+    "idle_customers_country": ("anti_join", "filter", "aggregate"),
+    "status_counts_year": ("group_by", "date_filter", "aggregate"),
+    "large_orders": ("group_by", "having", "aggregate"),
+    "first_order_city": ("join", "filter", "aggregate"),
 }
 SKILL_DESCRIPTIONS = {
     "filter": "WHERE conditions on one table",
@@ -304,8 +335,13 @@ class Task:
 
 
 EVAL_SEED = 12345  # training samples tasks with other seeds
-# Never trained: evaluation of templates whose skills appear only in other templates.
-HELDOUT_TEMPLATES = ("signups_year", "orders_by_country", "best_category_year")
+EVAL_VERSION = "eval-v3"
+# Never trained; their skills appear in other templates. The selection set drives checkpoint
+# selection and early stopping. The check set is scored only at the start and on the
+# selected and final checkpoints, so its score is not biased by selection.
+HELDOUT_SELECT = ("signups_year", "orders_by_country", "best_category_year", "lines_per_order_status", "repeat_buyers_cat")
+HELDOUT_CHECK = ("country_revenue_year", "idle_customers_country", "status_counts_year", "large_orders", "first_order_city")
+HELDOUT_TEMPLATES = HELDOUT_SELECT + HELDOUT_CHECK
 
 
 def _questions(name):
@@ -334,21 +370,29 @@ def eval_question_texts():
                      (_questions(name) if name in HELDOUT_TEMPLATES else reserved_questions(name)))
 
 
-def eval_tasks(per_template, k):
-    """per_template distinct questions per trained template; twice as many per held-out template."""
-    if per_template < 1 or k < 1:
+def eval_tasks(per_template, k, sets=("train", "select"), heldout_questions=4, heldout_k=None):
+    """sets: "train" (reserved parameters and shared wording of trained templates; per_template
+    questions, k attempts), "select" and "check" (held-out templates; heldout_questions
+    questions, heldout_k attempts, default k)."""
+    if per_template < 1 or k < 1 or heldout_questions < 1:
         raise ValueError("Evaluation counts must be positive")
     ensure_databases()
+    groups = {"select": HELDOUT_SELECT, "check": HELDOUT_CHECK}
     tasks = []
     for name in BUILTIN:
         tier, _ = TEMPLATES[name]
-        if name in HELDOUT_TEMPLATES:
-            split, items = "heldout_template", reserved_questions(name)[:2 * per_template]
-        else:
-            items = reserved_questions(name)[:per_template]
+        held = next((g for g, names in groups.items() if name in names), None)
+        if held:
+            if held not in sets:
+                continue
+            split, items, n = f"heldout_{held}", reserved_questions(name)[:heldout_questions], heldout_k or k
+        elif "train" in sets:
+            items, n = reserved_questions(name)[:per_template], k
             split = "shared_wording" if len(_questions(name)) == 1 else "reserved_params"
+        else:
+            continue
         for q, sql in items:
-            tasks.extend([Task(name, tier, q, sql, EVAL_DB_PATH, split)] * k)
+            tasks.extend([Task(name, tier, q, sql, EVAL_DB_PATH, split)] * n)
     return tasks
 
 
@@ -427,7 +471,12 @@ def grade(cons, sql, gold_sql):
     return True, "matches on all databases"
 
 
-def execute(con, sql, max_steps=2_000_000, *, max_rows=MAX_RESULT_ROWS, require_table=False, deterministic=False):
+# A correct correlated subquery over unindexed order_items needs about 18M steps; references
+# need under 0.1M. The budget bounds cross joins without rejecting slow correct SQL.
+MAX_STEPS = 50_000_000
+
+
+def execute(con, sql, max_steps=MAX_STEPS, *, max_rows=MAX_RESULT_ROWS, require_table=False, deterministic=False):
     """Run one bounded read-only statement; overflow returns an explicit error."""
     budget, reads = [0], set()
 

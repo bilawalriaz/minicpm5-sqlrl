@@ -103,6 +103,8 @@ class Handler(SimpleHTTPRequestHandler):
             "status": read_json(run / "status.json"),
             "metrics": read_jsonl(run / "metrics.jsonl"),
             "evals": read_jsonl(run / "evals.jsonl"),
+            "checks": read_jsonl(run / "checks.jsonl"),
+            "selected": read_json(run / "selected.json"),
         })
 
     def log_message(self, *_):

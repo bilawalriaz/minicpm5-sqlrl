@@ -50,3 +50,10 @@ def test_monitor_waits_for_run_directory(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["monitor", "--run", "never", "--pid", "1"])
     monitor.main()
     assert not (tmp_path / "never").exists()
+
+
+def test_heldout_selection_drop_is_reported(tmp_path):
+    evals = [{"step": 0, "pass1": 0.5, "by_split": {"heldout_select": 0.6}},
+             {"step": 10, "pass1": 0.5, "by_split": {"heldout_select": 0.3}}]
+    alerts, stop = monitor.check(tmp_path, [], evals, None, ARGS, 0)
+    assert stop is None and "held-out selection 0.300" in alerts[0]
