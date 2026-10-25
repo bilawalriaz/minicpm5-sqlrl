@@ -75,7 +75,7 @@ class Episode:
 
 def prompt_tokens(tokenizer, task, show_schema=True):
     messages = [
-        {"role": "system", "content": env.system_prompt(show_schema)},
+        {"role": "system", "content": env.system_prompt(show_schema, task.schema)},
         {"role": "user", "content": task.question},
     ]
     text = tokenizer.apply_chat_template(
@@ -175,7 +175,7 @@ def rollout(model, tokenizer, tasks, temp=1.0, max_turns=5, max_tokens=256,
         raise ValueError("Rollout needs at least one task")
     if len({str(t.db_path) for t in tasks}) != 1:
         raise ValueError("A rollout batch must use one database")
-    cons = env.verifier_connections(tasks[0].db_path)
+    cons = env.verifier_connections(tasks[0].db_path, tasks[0].alt_db_paths)
     try:
         con = cons[0]
         gold = {}

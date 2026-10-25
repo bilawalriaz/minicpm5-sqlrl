@@ -373,6 +373,8 @@ class Task:
     gold_sql: str
     db_path: Path = DB_PATH
     split: str = "train"  # evaluation: heldout_template, reserved_params or shared_wording
+    schema: str = None  # CREATE statements of a database other than the shop
+    alt_db_paths: tuple = None  # verifier databases for that schema; None uses the shop fixtures
 
 
 EVAL_SEED = 12345  # training samples tasks with other seeds
@@ -494,7 +496,9 @@ def connect(path=DB_PATH):
     return con
 
 
-def verifier_connections(db_path=DB_PATH):
+def verifier_connections(db_path=DB_PATH, alt_paths=None):
+    if alt_paths is not None:
+        return [connect(db_path)] + [connect(p) for p in alt_paths]
     ensure_databases()
     alternates = EVAL_ALT_DB_PATHS if Path(db_path) == EVAL_DB_PATH else ALT_DB_PATHS
     return [connect(db_path)] + [connect(p) for p in alternates]
@@ -629,15 +633,17 @@ TOOLS = [
 ]
 
 
-def system_prompt(show_schema=True):
-    p = ("You are a SQL agent with access to a SQLite database of an online shop. "
+def system_prompt(show_schema=True, schema=None):
+    """schema: CREATE statements of another database; None is the shop."""
+    subject = "a SQLite database of an online shop" if schema is None else "a SQLite database"
+    p = (f"You are a SQL agent with access to {subject}. "
          "Use run_sql to explore if needed. To answer, call submit_sql with the final query. "
          "submit_sql ends the task and returns its complete result to the user. "
          "Use exactly one function call per turn. A plain-text reply does not submit an answer. "
          "The final query must return exactly the columns requested, in that order, "
          "and work on databases with different data. Do not hard-code result values.")
     if show_schema:
-        p += "\n\nDatabase schema:\n" + SCHEMA
+        p += "\n\nDatabase schema:\n" + (SCHEMA if schema is None else schema)
     else:
         p += "\n\nDiscover the schema with run_sql (e.g. SELECT sql FROM sqlite_master)."
     return p

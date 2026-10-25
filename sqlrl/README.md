@@ -115,6 +115,25 @@ shaping. Full transcripts are saved in `runs/<name>/eval_samples/`. A checkpoint
 descends from a run trained on every built-in template (such as `curriculum_50b`) has
 seen these questions, so its scores do not measure generalization.
 
+## Cross-schema evaluation
+
+`spider_eval.py` measures transfer to schemas the model never trained on. It runs
+Spider dev questions through the same agent loop, on the original Spider database
+with its schema in the system prompt. Each submission is graded on that database and
+all of its Spider test-suite variants, by the strict verifier rule and by Spider's
+test-suite rule (columns may be permuted; row order counts when the reference has
+ORDER BY).
+
+```sh
+python scripts/prepare_spider.py   # downloads about 1.3 GB, extracts 3.3 GB
+python spider_eval.py --name spider_1b_released
+python spider_eval.py --name spider_2b_released --model ../models/MiniCPM5-2B
+```
+
+Results go to `runs/<name>/` (`summary.json`, `episodes.jsonl`, `excluded.json`).
+Use `--db` or `--limit` for a smaller run and `--check-only` to test the reference
+queries without a model.
+
 ## Generated templates
 
 `evolve.py` proposes templates for weak skills. A template is accepted only when,

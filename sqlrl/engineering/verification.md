@@ -371,3 +371,25 @@ released 1B, with `avg_order_value_country` excluded from the test set.
 
 2B outcomes over 1,472 attempts: 773 correct, 459 wrong, 192 max turns, 48 no query
 (1B: 118 correct, 100 wrong, 507 max turns, 640 no query, 107 length).
+
+## Cross-schema evaluation: Spider dev (spider-dev-testsuite-v1)
+
+Every evaluation split above uses the shop schema. `spider_eval.py` runs Spider dev
+(1,034 questions, 20 databases) through the same `run_sql`/`submit_sql` rollout. The
+agent sees the original Spider database and its schema; the system prompt drops "of an
+online shop" and shows that schema. Each submission is graded on the original database
+and every Spider test-suite variant (25 to 60 databases per schema including the original,
+695 files), with two
+rules: strict (`env.grade`, column positions kept) and test-suite (`exec_eval.result_eq`
+with `--keep_distinct`: columns may be permuted, row order counts when the reference has
+ORDER BY). `scripts/prepare_spider.py` downloads the data into `data/spider/`.
+
+Reference check (`python spider_eval.py --check-only`): 1,032 references run on every
+database; 2 are excluded because they return over 10,000 rows (`wta_1` #455 and #456).
+Each usable reference, submitted as the answer, passes both rules on every database.
+`tests/test_spider_eval.py` covers the comparison rule, exclusion, grading on variants,
+and the unchanged shop prompt.
+
+Runs (k 4, temperature 1, 5 turns, 384 tokens per turn), queued after the 2B pipeline:
+`runs/spider_1b_released`, `runs/spider_2b_released`, `runs/spider_1b_sql`
+(`release/MiniCPM5-1B-SQL`). Results: pending.
