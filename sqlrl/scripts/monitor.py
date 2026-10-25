@@ -72,6 +72,10 @@ def main():
     run = RUNS / args.run
     out = run / "monitor.jsonl"
     stopped = False
+    while not run.exists() and alive(args.pid):
+        time.sleep(5)  # the trainer creates the run directory after loading MLX
+    if not run.exists():
+        return
     while True:
         now = time.time()
         status, metrics, evals = read_json(run / "status.json"), read_jsonl(run / "metrics.jsonl"), read_jsonl(run / "evals.jsonl")

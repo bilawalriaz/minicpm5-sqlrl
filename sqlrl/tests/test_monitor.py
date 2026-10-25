@@ -36,3 +36,17 @@ def test_hang_and_alerts(tmp_path):
     assert "no status update" in monitor.check(tmp_path, [], [], status, ARGS, 46 * 60)[1]
     alerts, _ = monitor.check(tmp_path, [metric(4, update_skipped_nonfinite=True, peak_mem_gb=25)], [], None, ARGS, 0)
     assert len(alerts) == 2
+
+
+def test_monitor_waits_for_run_directory(tmp_path, monkeypatch):
+    monkeypatch.setattr(monitor, "RUNS", tmp_path)
+    monkeypatch.setattr(monitor.time, "sleep", lambda s: (tmp_path / "late").mkdir(exist_ok=True))
+    checks = iter([True, False])
+    monkeypatch.setattr(monitor, "alive", lambda pid: next(checks, False))
+    monkeypatch.setattr(sys, "argv", ["monitor", "--run", "late", "--pid", "1"])
+    monitor.main()
+    row = json.loads((tmp_path / "late" / "monitor.jsonl").read_text())
+    assert row["final"] == "exited without the done phase"
+    monkeypatch.setattr(sys, "argv", ["monitor", "--run", "never", "--pid", "1"])
+    monitor.main()
+    assert not (tmp_path / "never").exists()
