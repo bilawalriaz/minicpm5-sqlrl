@@ -87,8 +87,25 @@ When the model keeps failing a template, the generator writes simpler stepping-s
 
 Total API spend is about $2, most of it on template generation with review. All training and evaluation runs locally.
 
-## What's next
+## Running the 1B model locally
 
-The released MiniCPM5-2B is going through the same pipeline now: distillation from a fresh adapter, up to six hours of RL with early stopping, a second distillation pass, then one scoring of the test set. That will show how much each model gains from its own starting point and how the two finished models compare.
+`sqlrl/scripts/export_gguf.sh` fuses the final adapter into the model and writes BF16, Q8_0 (1.15 GB) and Q4_K_M (0.69 GB) GGUF files. It sets no-think mode as the chat template default, because that is how the model was trained.
+
+`docs/lmstudio.md` explains how to test it in LM Studio, with a system prompt and ten example questions with their measured success rates. The model writes its own tool calls in the MiniCPM format, so you run each query against the evaluation database and paste the result back.
+
+## MiniCPM5-2B
+
+The released MiniCPM5-2B is going through the same pipeline now: distillation from a fresh adapter, up to six hours of RL with early stopping, a second distillation pass, then one scoring of the test set.
+
+Its released-model scores are in, measured the same way as above, and it starts much stronger than the 1B:
+
+| | Released 2B | Released 1B | Fine-tuned 1B |
+| --- | --- | --- | --- |
+| Test set | 38.3% (26-51%) | 3.6% | 44.7% |
+| Check set | 73.6% (62-83%) | 12.2% | 70.1% |
+| Selection set | 47.4% (29-67%) | 5.6% | 50.0% |
+| Trained types, unseen parameters and data | 69.5% (58-81%) | 14.8% | 94.9% |
+
+The 2B already follows the tool protocol: 48 of its 1,472 attempts never submit SQL and 192 run out of turns. On never-trained question types the fine-tuned 1B is level with the released 2B (the intervals overlap). On trained types it is well ahead. The finished 2B will show how much the pipeline adds to a model that doesn't have to learn the protocol first.
 
 Code, tests and the engineering records are in this repository. Model weights, databases and checkpoints stay local. The detailed evidence for every number above is in `sqlrl/engineering/verification.md`.

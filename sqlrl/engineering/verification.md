@@ -354,3 +354,20 @@ sft_1b_v1/final is the final 1B checkpoint (higher selection score).
 `test-set-exclusions.txt` applies the recorded rule to 202 accepted generated
 templates: `avg_order_value_country` overlaps `avg_order_value_by_country_status`
 and is excluded from headline test numbers. The other nine test templates are kept.
+
+## Released 2B baseline
+
+Stage 1 of `scripts/pipeline.sh ../models/MiniCPM5-2B p2b 6` scored the released
+MiniCPM5-2B (bf16) on every split with k 16 and 384 tokens per turn
+(`runs/p2b_results/released.log`). `released-2b-report.md` compares it with the
+released 1B, with `avg_order_value_country` excluded from the test set.
+
+| Split | Released 2B | Released 1B |
+| --- | --- | --- |
+| Test set | 0.383 | 0.036 |
+| Check set | 0.736 | 0.122 |
+| Selection set | 0.474 | 0.056 |
+| Reserved parameters | 0.695 | 0.148 |
+
+2B outcomes over 1,472 attempts: 773 correct, 459 wrong, 192 max turns, 48 no query
+(1B: 118 correct, 100 wrong, 507 max turns, 640 no query, 107 length).
