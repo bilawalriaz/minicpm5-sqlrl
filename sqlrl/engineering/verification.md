@@ -203,3 +203,35 @@ removed by the clause-ablation check. Three remain accepted for training.
 ## Checks
 
 `pytest.txt` (39 passed), `dashboard-check.txt`, `dashboard-build.txt`.
+
+## Overnight run: overnight_v22_base
+
+Started 04:54 on 25 October 2026 at commit f2df4bf (`git` field in config.json):
+
+```sh
+python -u train.py --name overnight_v22_base --steps 300 --max-hours 8 \
+  --teacher glm-5.3-flash --eval-every 10 --eval-k 4 --save-every 10 --seed 11
+```
+
+Base model with a fresh LoRA adapter (rank 32, scale 2), learning rate 3e-5, 16
+prompts x 8, temperature 1, five turns, 256 tokens per turn, gradient clipping 1,
+generation batch 64, micro-batch 8,192 tokens, 26 GiB MLX cap, evolution every 10
+steps. Short-run step times were 80 to 210 s and evaluation 11 to 52 s, so about
+280 steps fit in eight hours; the wall-clock bound stops earlier if steps are
+slower. Checkpoints with optimizer state go to `runs/overnight_v22_base/step_NNNNN/`
+every 10 steps and to `final/` at the end.
+
+Attached processes: `caffeinate -i -s -m -w`, `scripts/watchdog.sh` (log
+`runs/overnight_v22_base.mem`) and `scripts/monitor.py` (log
+`runs/overnight_v22_base/monitor.jsonl`). The first monitor process exited at
+startup because the run directory did not exist yet
+(`runs/overnight_v22_base.monitor-crash1.log`); it was fixed in 98ebdec and restarted
+at step 4. The dashboard server from the earlier session had exited; it was
+restarted and `/runs/overnight_v22_base` returned HTTP 200.
+
+First observations: evaluation pass@1 0.129 at step 0 and 0.543 at step 10
+(held-out templates 0.091 then 0.227; reserved parameters 0.141 then 0.703).
+Training reward rose from -0.091 to 0.789. Missing submissions fell from 64 to 0 by
+step 3. Peak MLX memory 7.3 GiB. The first evolution cycle accepted 1 of 4
+templates (`avg_spend_by_city_on_category`); the rejections were an empty
+primary answer (twice) and more than 256 parameter combinations.
