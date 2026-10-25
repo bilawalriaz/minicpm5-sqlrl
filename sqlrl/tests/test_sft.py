@@ -29,3 +29,17 @@ def test_teacher_examples_skip_heldout_and_eval_questions(monkeypatch, tmp_path)
     path.write_text('\n'.join(json.dumps(r) for r in rows))
     out = sft.teacher_examples(Tokenizer(), path, 256)
     assert [ex[1] for ex in out] == ['count_city'] and out[0][0] == 'teacher'
+
+
+def test_replay_reads_correct_student_transcripts_from_runs(monkeypatch, tmp_path):
+    monkeypatch.setattr(sft, 'prompt_tokens', lambda tok, task, show: [1])
+    monkeypatch.setattr(sft, 'HERE', tmp_path)
+    samples = tmp_path / 'runs' / 'r1' / 'samples'
+    samples.mkdir(parents=True)
+    seg = [{'role': 'assistant', 'text': 'submit'}, {'role': 'tool', 'text': '3'}]
+    rec = lambda q, outcome, source='student': {'question': q, 'outcome': outcome, 'source': source,
+                                                'template': 'count_city', 'segments': seg}
+    (samples / 'step_00001.json').write_text(json.dumps(
+        [rec('a', 'correct'), rec('a', 'correct'), rec('b', 'wrong'), rec('c', 'correct', 'teacher')]))
+    out = sft.replay_examples(Tokenizer(), ['r1'], 10, 0)
+    assert len(out) == 1 and out[0][0] == 'student'

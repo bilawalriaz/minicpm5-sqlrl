@@ -68,7 +68,7 @@ def replay_examples(tok, runs, limit, seed):
     """Correct student transcripts from earlier runs, one per question, newest first."""
     seen, out = set(), []
     for run in runs:
-        for path in sorted((HERE / run / "samples").glob("step_*.json"), reverse=True):
+        for path in sorted((HERE / "runs" / run / "samples").glob("step_*.json"), reverse=True):
             for r in json.loads(path.read_text()):
                 if r["source"] != "student" or r["outcome"] != "correct" or r["question"] in seen:
                     continue

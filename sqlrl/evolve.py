@@ -397,6 +397,22 @@ def validate(spec, teacher, known_sql, reviewer=None):
             con.close()
 
 
+def unique_names(specs):
+    """Generators often reuse a name; a numbered suffix keeps the proposal instead of rejecting it."""
+    con = connect()
+    taken = set(env.TEMPLATES) | {name for (name,) in con.execute("SELECT name FROM templates")}
+    con.close()
+    for spec in specs:
+        name = spec.get("name")
+        if isinstance(name, str) and name in taken:
+            i = 2
+            while f"{name[:36]}_{i}" in taken:
+                i += 1
+            spec["name"] = f"{name[:36]}_{i}"
+        taken.add(spec.get("name"))
+    return specs
+
+
 def evolve(skills, n, model="glm-5.3-flash", workers=4, solver="glm-5.3-flash", hard=False, failing=None,
            reviewer=None, combos=None):
     """Propose n templates per skill, validate them, store every verdict. Returns accepted specs.
@@ -420,7 +436,7 @@ def evolve(skills, n, model="glm-5.3-flash", workers=4, solver="glm-5.3-flash", 
 
     with ThreadPoolExecutor(workers) as pool:
         proposals = list(pool.map(safe_propose, range(len(skills)), skills))
-        specs = [spec for batch, _ in proposals for spec in batch]
+        specs = unique_names([spec for batch, _ in proposals for spec in batch])
         verdicts = list(pool.map(lambda spec: validate(spec, teacher, known_sql,
                                                        (client, reviewer) if reviewer else None), specs))
     accepted = []

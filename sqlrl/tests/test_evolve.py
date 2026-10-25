@@ -172,3 +172,9 @@ def test_failed_review_rejects_without_crashing(monkeypatch):
     monkeypatch.setattr(evolve, 'complete', broken)
     ok, why = evolve.validate(spec(), teacher, set(), reviewer=(None, 'rev'))
     assert not ok and why.startswith('reviewer rev rejected: review failed')
+
+
+def test_reused_names_get_a_suffix(tmp_path, monkeypatch):
+    monkeypatch.setattr(evolve, 'DB', tmp_path / 'templates.db')
+    specs = evolve.unique_names([{'name': 'count_city'}, {'name': 'new_one'}, {'name': 'new_one'}])
+    assert [s['name'] for s in specs] == ['count_city_2', 'new_one', 'new_one_2']
