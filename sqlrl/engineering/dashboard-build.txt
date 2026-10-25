@@ -19,16 +19,16 @@ dist/assets/inter-cyrillic-ext-wght-normal-BOeWTOD4.woff2        25.96 kB
 dist/assets/inter-latin-wght-normal-Dx4kXJAl.woff2               48.25 kB
 dist/assets/inter-latin-ext-wght-normal-DO1Apj_S.woff2           85.06 kB
 dist/assets/index-hOhh81ec.css                                  372.64 kB │ gzip:  51.08 kB
-dist/assets/format-Dgx1fSkX.js                                    1.09 kB │ gzip:   0.62 kB │ map:     6.63 kB
-dist/assets/_app-R0jkPuff.js                                      5.04 kB │ gzip:   1.53 kB │ map:    12.66 kB
-dist/assets/cx-Chej6-mg.js                                        8.35 kB │ gzip:   3.15 kB │ map:    51.78 kB
-dist/assets/useHover-BF7dvveg.js                                 24.80 kB │ gzip:   8.96 kB │ map:   194.49 kB
-dist/assets/scrollEdges-BxE-J-jT.js                              47.71 kB │ gzip:  16.87 kB │ map:   299.20 kB
-dist/assets/status-DHlFrOtm.js                                   56.39 kB │ gzip:  18.15 kB │ map: 2,697.12 kB
-dist/assets/api-Rm_3pueD.js                                      81.01 kB │ gzip:  28.64 kB │ map:   438.91 kB
-dist/assets/_app-B2B6VXsS.js                                    108.77 kB │ gzip:  34.51 kB │ map:   596.31 kB
-dist/assets/runs._name-6COcw_YS.js                              111.70 kB │ gzip:  38.31 kB │ map:   613.23 kB
-dist/assets/index-Cg_uGUKm.js                                   304.14 kB │ gzip:  96.48 kB │ map: 1,554.64 kB
-dist/assets/charts-BxQEvNl1.js                                  398.84 kB │ gzip: 116.06 kB │ map: 2,197.25 kB
+dist/assets/format-DCN50_Gr.js                                    1.09 kB │ gzip:   0.63 kB │ map:     6.63 kB
+dist/assets/_app-CrGz93wW.js                                      5.04 kB │ gzip:   1.53 kB │ map:    12.66 kB
+dist/assets/cx-DVQK8Ti6.js                                        8.35 kB │ gzip:   3.16 kB │ map:    51.78 kB
+dist/assets/useHover-BLFSH9ZR.js                                 24.80 kB │ gzip:   8.96 kB │ map:   194.49 kB
+dist/assets/scrollEdges-Bp-VUErV.js                              47.71 kB │ gzip:  16.88 kB │ map:   299.20 kB
+dist/assets/status-BSPVkjL-.js                                   56.47 kB │ gzip:  18.18 kB │ map: 2,697.26 kB
+dist/assets/api-CWmL4zbb.js                                      81.01 kB │ gzip:  28.64 kB │ map:   438.91 kB
+dist/assets/_app-D4knx4v-.js                                    108.77 kB │ gzip:  34.51 kB │ map:   596.31 kB
+dist/assets/runs._name-6Ipw_kxN.js                              111.70 kB │ gzip:  38.32 kB │ map:   613.23 kB
+dist/assets/index-Cgl0PwPn.js                                   304.14 kB │ gzip:  96.48 kB │ map: 1,554.64 kB
+dist/assets/charts-DERVET0O.js                                  399.13 kB │ gzip: 116.18 kB │ map: 2,198.21 kB
 
-✓ built in 604ms
+✓ built in 571ms

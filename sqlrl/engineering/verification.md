@@ -92,3 +92,114 @@ The dashboard was rebuilt, its server restarted, and the run page returned HTTP
 200. No overnight training has been started. The private GitHub repository contains
 source, tests and these records; credentials, weights, databases and raw runs stay
 local.
+
+# Verification record, sql-v2.2, 25 October 2026
+
+Same runtime as above. Previous data directories (`sql-v2`, `sql-v2.1`), runs and
+checkpoints are unchanged. New fixtures are in `data/sql-v2.2/`.
+
+## Confirmed bugs in sql-v2.1 and fixes
+
+1. Accidental equivalences. `wrong-sql-v21-vs-v22.json` grades 21 plausible wrong
+   rewrites of built-in references for every parameter on both splits. Eleven passed
+   all four sql-v2.1 fixtures for some parameter: `COUNT(DISTINCT name)` for a city
+   count (15/16 train, 16/16 eval), `<=` for `<` (18/18), an open-ended year range
+   for 2024 signups (5/15), `AVG(DISTINCT price)`, `SELECT DISTINCT name` in
+   frequent_customers (4/4) and top_spenders (2/2), `GROUP BY name` in top_spenders
+   (eval 2/2), a missing status filter and `SUM(quantity)` in best_category_year
+   (train 2/3 and 1/3), and missing `COALESCE` or `SUM(DISTINCT ...)` in
+   units_of_product (eval 3/198 and 1/198). The sql-v2.2 adversarial fixture adds
+   the cases listed in README.md; all 21 rewrites are rejected for every parameter.
+   Equivalent rewrites (`NOT EXISTS`, `LEFT JOIN ... IS NULL`, `BETWEEN`, `TOTAL`,
+   `IN` subqueries, reordered expressions) are accepted.
+2. Clock reads. `date('now')`, `strftime('%s','now')` and `julianday('now')` passed the
+   deterministic check because the authorizer sees only function names. Graded SQL
+   with `'now'`, `'localtime'` or `'utc'` is now rejected.
+3. Generated-template validation accepted references whose answers were empty,
+   identical on every fixture (a copied value passes), tie-dependent, or equal to an
+   evaluation question in other words. Two legacy generated templates from
+   curriculum_50b have the same answer on all four sql-v2.2 fixtures; the new check
+   rejects them. A clause-ablation check rejects templates whose `HAVING` or `WHERE`
+   condition never changes an answer; it rejected `big_revenue_categories`
+   (thresholds 1,000 to 10,000 against category totals in the hundreds of thousands).
+4. Training metrics `by_template` and `by_tier` averaged shaped rewards, and the
+   dashboard showed them as rates beside evaluation solve rates. They now count
+   correct submissions. The dashboard labels older runs "Reward".
+5. A nonfinite update raised an exception and ended the run. It now skips the update;
+   three consecutive skips stop the run.
+6. Checkpoints were written in place and held no optimizer state. They are now
+   written to a temporary directory and renamed, and include optimizer and
+   curriculum state. `--resume` restores them. SIGTERM or SIGINT used to leave a
+   stale status file and no checkpoint; the trainer now finishes an in-progress
+   update or save, saves `interrupted_step_NNNNN/`, and records the error.
+
+## Checked and found consistent
+
+- KV-cache continuation. mlx-lm 0.31.1 `BatchGenerator` runs each sampled token
+  through the model before it reports it, so a finished sequence's cache includes its
+  stop token. `BatchKVCache` keeps per-sequence RoPE offsets. `OBS_TEMPLATE` matches
+  the MiniCPM5 chat template for tool messages and the no-think generation prompt.
+- Sampling and training probabilities. `logprob-check.json`: 48 episodes from
+  curriculum_50b/step_00025, 6,646 generated tokens, all multi-turn. Mean absolute
+  difference between sampler and training-forward log-probabilities is 0.0087 nats
+  (p99 0.136, max 0.74); later-turn tokens 0.0085. Dropping each first-turn stop token
+  raises later-turn disagreement to 0.0154, so this control is weak evidence; a
+  position shift would be larger.
+- Target shift, masks, right padding and micro-batch accumulation (existing tests).
+- Teacher actions use the student's exact call format and token budget (inspected).
+- No built-in reference depends on tie order (random secondary sort keys, 12 tries
+  per fixture), and no built-in answer is identical on all four fixtures (tests).
+
+## Evaluation split
+
+Held-out templates: `signups_year`, `orders_by_country`, `best_category_year`.
+`checkpoint-eval-v22.txt` evaluates existing adapters (29 questions, 4 attempts):
+
+| Adapter | pass@1 | held-out templates | reserved params | shared wording |
+| --- | --- | --- | --- | --- |
+| Base model | 0.078 | 0.068 | 0.078 | 0.125 |
+| curriculum_50b/step_00025 | 0.319 | 0.386 | 0.250 | 0.500 |
+| verifier_v21_check/final | 0.931 | 0.977 | 0.906 | 0.875 |
+
+The curriculum_50b lineage trained on every built-in template and parameter, so its
+scores do not measure generalization. The overnight run starts from the base model
+with a fresh LoRA adapter.
+
+## Archive regrading
+
+`sql-audit-curriculum_50b.json` grades 27 steps on the three original databases plus
+each version's training fixtures. Of 2,266 recorded accepts, 1,886 pass both
+versions, 348 fail both, 28 pass sql-v2.1 but fail sql-v2.2 (frequent_customers 15,
+top_spenders 9, legacy generated templates 3, priciest_in_cat 1), and 4 fail sql-v2.1
+but pass sql-v2.2. Those 4 belong to the two legacy generated templates above; the
+new template validation rejects both templates. All 471 recorded rejects stay
+rejected; 719 traces have no recorded SQL. Teacher traces (55) pass both versions.
+`sql-audit-v2-runs.json`: the 84 recorded submissions in verifier_v2_smoke and
+verifier_v21_check keep their verdicts.
+
+## Short runs on the final code
+
+`short-runs-v22.json` holds configuration, per-step metrics and evaluations.
+
+- v22_base_short: base model, 16 prompts x 8, teacher on, evolution off, 10 steps.
+  Evaluation (29 questions x 2): 0.086, 0.345 at step 5, 0.707 at step 10
+  (held-out templates 0.091, 0.364, 0.545). Training correctness 33/128 to 108/128.
+  Groups with mixed rewards: 16, 15, 16, 11, 14, 14, 11, 11, 10, 10. The teacher
+  rescued 5 and 9 groups in steps 1 and 2. Missing submissions fell from 57 to 17
+  after one update and to 0 by step 4. Mean turns fell from 3.2 to 1.0: the model
+  submits at once rather than risk the -0.2 turn-limit penalty. Step time fell from
+  about 210 s to 80 s as episodes became single-turn. Peak MLX memory 9.2 GiB. No
+  literal answer was graded correct. Inspected rejected answers were wrong
+  (missing filters, wrong joins, correlated-subquery mistakes, syntax errors).
+- v22_ctl_time: `--max-hours 0.08`; stopped after step 8 at 0.078 h with
+  `stop_reason: time limit`, ran the final evaluation and saved `final`.
+- v22_ctl_resume: `--resume v22_ctl_time/final`; config records
+  `optimizer_restored: true`, `start_step: 8`. SIGTERM during the step-10 rollout
+  saved `interrupted_step_00009` and set the status to error.
+
+Template evolution ran once against the API: 4 of 6 proposals accepted; one later
+removed by the clause-ablation check. Three remain accepted for training.
+
+## Checks
+
+`pytest.txt` (39 passed), `dashboard-check.txt`, `dashboard-build.txt`.

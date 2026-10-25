@@ -23,7 +23,7 @@ export function phaseLabel(status: RunStatus | null) {
     case "error":
       return `Stopped at step ${status.step}: ${status.error}`;
     case "done":
-      return `Finished, ${status.step} steps`;
+      return status.stop_reason === "time limit" ? `Stopped at the time limit, ${status.step} steps` : `Finished, ${status.step} steps`;
   }
 }
 

@@ -18,7 +18,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-VERIFIER_VERSION = "sql-v2.1"
+VERIFIER_VERSION = "sql-v2.2"
 PROTOCOL_VERSION = "submit-sql-v2"
 DATA_DIR = Path(__file__).parent / "data" / VERIFIER_VERSION
 DB_PATH = DATA_DIR / "train.db"
@@ -55,13 +55,19 @@ CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER REFERENCES cust
 CREATE TABLE order_items (order_id INTEGER REFERENCES orders(id), product_id INTEGER REFERENCES products(id), quantity INTEGER, unit_price REAL);"""
 
 
-def build_db(path=DB_PATH, seed=0, *, sparse=False, complete_catalog=False):
+def build_db(path=DB_PATH, seed=0, *, sparse=False, complete_catalog=False, orderable_parity=None,
+             adversarial=False):
+    """Build one fixture. orderable_parity limits orders to products at even (0) or odd (1)
+    positions of the complete catalog, so every product name has zero sales on some fixture.
+    adversarial adds cases that separate plausible wrong SQL from the reference."""
     rng = random.Random(seed)
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.unlink(missing_ok=True)
     con = sqlite3.connect(path)
     con.executescript(SCHEMA)
+    signup_years = [2021, 2022, 2023, 2024, 2025] if adversarial else [2022, 2023, 2024]
+    order_years = [2022, 2023, 2024, 2025, 2026] if adversarial else [2023, 2024, 2025]
 
     names = set()
     while len(names) < 200:
@@ -70,36 +76,112 @@ def build_db(path=DB_PATH, seed=0, *, sparse=False, complete_catalog=False):
         if seed % 2 and i <= 3:
             name = "Alex Smith"  # Names are not unique identifiers.
         country = rng.choice(list(CITIES))
-        date = f"{rng.choice([2022, 2023, 2024])}-{rng.randint(1, 12):02d}-{rng.randint(1, 28):02d}"
+        date = f"{rng.choice(signup_years)}-{rng.randint(1, 12):02d}-{rng.randint(1, 28):02d}"
         con.execute("INSERT INTO customers VALUES (?,?,?,?,?)", (i, name, rng.choice(CITIES[country]), country, date))
+    if adversarial:
+        # Two different customers share a name in every city: COUNT(DISTINCT name) is not a customer count.
+        for city in [c for cs in CITIES.values() for c in cs]:
+            ids = [r[0] for r in con.execute("SELECT id FROM customers WHERE city=? ORDER BY id", (city,))]
+            if len(ids) >= 2:
+                con.execute("UPDATE customers SET name=(SELECT name FROM customers WHERE id=?) WHERE id=?", (ids[0], ids[1]))
 
-    pnames = set()
     pid = 0
     for cat in CATEGORIES:
         for noun in NOUN[cat]:
             for adj in (ADJ if complete_catalog else rng.sample(ADJ, 2)):
                 pid += 1
-                pnames.add(f"{adj} {noun}")
                 category = rng.choice(CATEGORIES) if seed % 4 == 2 else cat
-                con.execute("INSERT INTO products VALUES (?,?,?,?)", (pid, f"{adj} {noun}", category, round(rng.uniform(3, 300), 2)))
+                price = round(rng.uniform(3, 300), 2)
+                position = (pid - 1) % (len(NOUN[cat]) * (len(ADJ) if complete_catalog else 2))
+                if adversarial and position < 4:
+                    # Exact thresholds of cheap_products, with a repeated price per category.
+                    price = (50.0, 50.0, 100.0, 150.0)[position]
+                con.execute("INSERT INTO products VALUES (?,?,?,?)", (pid, f"{adj} {noun}", category, price))
 
-    # Leave some products unordered so "never ordered" questions have answers.
-    orderable = list(range(1, pid + 1)) if complete_catalog else rng.sample(range(1, pid + 1), pid - 6)
-    for oid in range(1, 81 if sparse else 1201):
-        cust = rng.randint(1, 200)
-        date = f"{rng.choice([2023, 2024, 2025])}-{rng.randint(1, 12):02d}-{rng.randint(1, 28):02d}"
+    if orderable_parity is not None:
+        orderable = [p for p in range(1, pid + 1) if (p - 1) % 2 == orderable_parity]
+    elif complete_catalog:
+        orderable = list(range(1, pid + 1))
+    else:
+        # Leave some products unordered so "never ordered" questions have answers.
+        orderable = rng.sample(range(1, pid + 1), pid - 6)
+    price_of = dict(con.execute("SELECT id, price FROM products"))
+
+    def add_order(customer, date, status, lines):
+        oid = con.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM orders").fetchone()[0]
+        con.execute("INSERT INTO orders VALUES (?,?,?,?)", (oid, customer, date, status))
+        for prod, qty, unit in lines:
+            con.execute("INSERT INTO order_items VALUES (?,?,?,?)", (oid, prod, qty, unit))
+        return oid
+
+    for _ in range(80 if sparse else 1200):
+        date = f"{rng.choice(order_years)}-{rng.randint(1, 12):02d}-{rng.randint(1, 28):02d}"
         status = rng.choices(STATUSES, weights=[70, 15, 10, 5])[0]
-        con.execute("INSERT INTO orders VALUES (?,?,?,?)", (oid, cust, date, status))
-        for prod in rng.sample(orderable, rng.randint(1, 4)):
-            price = con.execute("SELECT price FROM products WHERE id=?", (prod,)).fetchone()[0]
-            con.execute("INSERT INTO order_items VALUES (?,?,?,?)", (oid, prod, rng.randint(1, 5), round(price * rng.uniform(0.65, 1.35), 2)))
-    if complete_catalog:
+        add_order(rng.randint(1, 200), date, status,
+                  [(p, rng.randint(1, 5), round(price_of[p] * rng.uniform(0.65, 1.35), 2))
+                   for p in rng.sample(orderable, rng.randint(1, 4))])
+    if complete_catalog and orderable_parity is None:
+        # Every product sells, with repeated quantities, so COUNT(*) and SUM(DISTINCT quantity)
+        # differ from SUM(quantity) for every built-in product name.
         for prod in orderable:
-            if not con.execute("SELECT 1 FROM order_items WHERE product_id=? LIMIT 1", (prod,)).fetchone():
-                price = con.execute("SELECT price FROM products WHERE id=?", (prod,)).fetchone()[0]
-                con.execute("INSERT INTO order_items VALUES (?,?,?,?)", (1, prod, 3, round(price * 0.8, 2)))
+            for _ in range(2):
+                con.execute("INSERT INTO order_items VALUES (?,?,?,?)",
+                            (rng.randint(1, 80 if sparse else 1200), prod, 2, round(price_of[prod] * 0.8, 2)))
+    if adversarial:
+        _add_adversarial_orders(con, rng, orderable, price_of, add_order)
     con.commit()
     con.close()
+
+
+def _add_adversarial_orders(con, rng, orderable, price_of, add_order):
+    city, country = "London", "UK"
+    new_id = lambda: con.execute("SELECT MAX(id) + 1 FROM customers").fetchone()[0]
+    expensive = sorted(orderable, key=price_of.get)[-3:]
+    cheap = sorted(orderable, key=price_of.get)[:3]
+    # Same-name heavy buyers: both exceed every order threshold and both are top spenders,
+    # so SELECT DISTINCT name or GROUP BY name changes the answer.
+    for _ in range(2):
+        cid = new_id()
+        con.execute("INSERT INTO customers VALUES (?,?,?,?,?)", (cid, "Nora Khan", city, country, "2023-03-03"))
+        for k in range(14):
+            add_order(cid, f"{2023 + k % 3}-{k % 12 + 1:02d}-15", "shipped",
+                      [(p, 5, round(price_of[p], 2)) for p in expensive])
+    # Same-name light buyers: seven orders each, fourteen together.
+    for _ in range(2):
+        cid = new_id()
+        con.execute("INSERT INTO customers VALUES (?,?,?,?,?)", (cid, "Sam Weber", "Paris", "France", "2024-05-05"))
+        for k in range(7):
+            add_order(cid, f"2024-{k + 1:02d}-10", "shipped", [(cheap[0], 1, round(price_of[cheap[0]], 2))])
+
+    def ranked(year, measure, shipped=True):
+        where = "o.status = 'shipped' AND " if shipped else ""
+        return [r[0] for r in con.execute(
+            f"SELECT p.category FROM order_items oi JOIN orders o ON o.id = oi.order_id JOIN products p ON p.id = oi.product_id "
+            f"WHERE {where}o.order_date LIKE '{year}-%' GROUP BY p.category ORDER BY {measure} DESC")]
+
+    revenue = "SUM(oi.quantity * oi.unit_price)"
+    for year in (2023, 2024, 2025):
+        cats = ranked(year, revenue)
+        totals = dict(con.execute(
+            "SELECT p.category, SUM(oi.quantity * oi.unit_price) FROM order_items oi JOIN orders o ON o.id = oi.order_id "
+            "JOIN products p ON p.id = oi.product_id WHERE o.status = 'shipped' AND o.order_date LIKE ? GROUP BY p.category",
+            (f"{year}-%",)))
+        # A large cancelled sale moves the runner-up ahead only when cancelled orders count.
+        runner = cats[1]
+        gap = totals[cats[0]] - totals[runner] + 2000
+        items = [p for p in orderable if con.execute("SELECT category FROM products WHERE id=?", (p,)).fetchone()[0] == runner]
+        prod = max(items, key=price_of.get)
+        while gap > 0:
+            add_order(rng.randint(1, 200), f"{year}-06-15", "cancelled", [(prod, 5, price_of[prod])])
+            gap -= 5 * price_of[prod]
+        # Many cheap shipped units in the weakest category win on quantity and line count, not revenue.
+        weakest = cats[-1]
+        items = [p for p in orderable if con.execute("SELECT category FROM products WHERE id=?", (p,)).fetchone()[0] == weakest]
+        prod = min(items, key=price_of.get)
+        while ranked(year, "SUM(oi.quantity)")[0] != weakest or ranked(year, "COUNT(*)")[0] != weakest:
+            add_order(rng.randint(1, 200), f"{year}-07-15", "shipped", [(prod, 5, price_of[prod])])
+        assert ranked(year, revenue)[0] == cats[0] != ranked(year, revenue, shipped=False)[0]
+        assert ranked(year, revenue)[0] != weakest, "cheap units changed the revenue leader"
 
 
 # ---------------------------------------------------------------------------
@@ -218,50 +300,66 @@ class Task:
     question: str
     gold_sql: str
     db_path: Path = DB_PATH
-
-
-def has_answer(con, sql):
-    """Reject questions whose correct answer is empty or NULL: any broken query
-    that returns nothing would match them, which is free reward for a bug."""
-    rows, _ = execute(con, sql)
-    return any(v is not None for row in rows for v in row)
+    split: str = "train"  # evaluation: heldout_template, reserved_params or shared_wording
 
 
 EVAL_SEED = 12345  # training samples tasks with other seeds
+# Never trained: evaluation of templates whose skills appear only in other templates.
+HELDOUT_TEMPLATES = ("signups_year", "orders_by_country", "best_category_year")
 
 
-@lru_cache(maxsize=None)
-def reserved_questions(name):
-    """Reserve parameters explicitly; constant templates use unseen evaluation data."""
+def _questions(name):
     fn = TEMPLATES[name][1]
     candidates = {}
     for seed in range(256):
         q, sql = fn(random.Random(EVAL_SEED + seed))
         candidates.setdefault(q, sql)
-    items = sorted(candidates.items())
+    return sorted(candidates.items())
+
+
+@lru_cache(maxsize=None)
+def reserved_questions(name):
+    """Reserve parameters explicitly; constant templates use unseen evaluation data."""
+    items = _questions(name)
+    if name in HELDOUT_TEMPLATES:
+        return tuple(random.Random(EVAL_SEED).sample(items, len(items)))
     if len(items) == 1:
         return tuple(items)
     return tuple(items[:min(2, max(1, len(items) // 3))])
 
 
+@lru_cache(maxsize=None)
+def eval_question_texts():
+    return frozenset(q for name in BUILTIN for q, _ in
+                     (_questions(name) if name in HELDOUT_TEMPLATES else reserved_questions(name)))
+
+
 def eval_tasks(per_template, k):
+    """per_template distinct questions per trained template; twice as many per held-out template."""
     if per_template < 1 or k < 1:
         raise ValueError("Evaluation counts must be positive")
     ensure_databases()
     tasks = []
     for name in BUILTIN:
         tier, _ = TEMPLATES[name]
-        for q, sql in reserved_questions(name)[:per_template]:
-            tasks.extend([Task(name, tier, q, sql, EVAL_DB_PATH)] * k)
+        if name in HELDOUT_TEMPLATES:
+            split, items = "heldout_template", reserved_questions(name)[:2 * per_template]
+        else:
+            items = reserved_questions(name)[:per_template]
+            split = "shared_wording" if len(_questions(name)) == 1 else "reserved_params"
+        for q, sql in items:
+            tasks.extend([Task(name, tier, q, sql, EVAL_DB_PATH, split)] * k)
     return tasks
 
 
 def sample_tasks(n, seed, tiers=(1, 2, 3), weights=None):
     rng = random.Random(seed)
-    names = [k for k, (t, _) in TEMPLATES.items() if t in tiers]
+    names = [k for k, (t, _) in TEMPLATES.items() if t in tiers and k not in HELDOUT_TEMPLATES]
     if not names:
         raise ValueError("No templates match the selected tiers")
     w = [weights[k] for k in names] if weights else None
+    constant = {name for name in BUILTIN if len(_questions(name)) == 1}
+    shared = {q for name in constant for q, _ in _questions(name)}
     tasks = []
     for _ in range(max(100, n * 100)):
         if len(tasks) == n:
@@ -269,12 +367,9 @@ def sample_tasks(n, seed, tiers=(1, 2, 3), weights=None):
         name = rng.choices(names, weights=w)[0]
         tier, fn = TEMPLATES[name]
         q, sql = fn(rng)
-        reserved_owner = next((owner for owner in BUILTIN if q in dict(reserved_questions(owner))), None)
-        if reserved_owner is not None:
-            owner_fn = TEMPLATES[reserved_owner][1]
-            # Constant templates share wording but use unseen evaluation data.
-            if any(owner_fn(random.Random(i))[0] != q for i in range(32)):
-                continue
+        # Constant templates share wording but use unseen evaluation data.
+        if q in eval_question_texts() and q not in shared:
+            continue
         tasks.append(Task(name, tier, q, sql))
     raise RuntimeError("Could not sample tasks outside reserved evaluation parameters")
 
@@ -286,7 +381,9 @@ def ensure_databases():
         for i, path in enumerate(paths):
             if not path.exists():
                 tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
-                build_db(tmp, seed=100 + i, sparse=(i % 4 == 3), complete_catalog=(i % 4 == 2))
+                role = i % 4  # 0 primary, 1 adversarial, 2 sales witness, 3 sparse
+                build_db(tmp, seed=100 + i, sparse=role == 3, complete_catalog=role != 0,
+                         orderable_parity={1: 1, 3: 0}.get(role), adversarial=role == 1)
                 tmp.replace(path)
 
 
@@ -348,6 +445,8 @@ def execute(con, sql, max_steps=2_000_000, *, max_rows=MAX_RESULT_ROWS, require_
         budget[0] += 1
         return int(budget[0] > max_steps // 1000)
 
+    if deterministic and _CLOCK.search(sql):
+        return None, "Date and time functions may not read the current time"
     con.set_authorizer(authorize)  # Also invalidates cached authorization decisions.
     con.set_progress_handler(progress, 1000)
     cur = None
@@ -366,6 +465,22 @@ def execute(con, sql, max_steps=2_000_000, *, max_rows=MAX_RESULT_ROWS, require_
             cur.close()
         con.set_progress_handler(None, 1000)
         con.set_authorizer(_authorizer)
+
+
+# Date functions read the clock through these modifiers; the authorizer only sees function names.
+_CLOCK = re.compile(r"'\s*(now|localtime|utc)\s*'", re.I)
+
+
+def tie_dependent(con, sql, tries=12):
+    """True if a reference's result depends on how ORDER BY ... LIMIT breaks ties.
+    Random secondary sort keys are added to every ORDER BY that feeds a LIMIT."""
+    shuffled = re.sub(r"(ORDER\s+BY\s[^()]*?)(\s+LIMIT\s)", r"\1, random()\2", sql, flags=re.I)
+    if shuffled == sql:
+        return False
+    first, err = execute(con, sql)
+    if err:
+        raise ValueError(f"Reference query failed: {err}")
+    return any(not results_match(execute(con, shuffled)[0], first) for _ in range(tries))
 
 
 def format_rows(rows, error, max_rows=10, max_cell=60):

@@ -1,0 +1,13 @@
+{
+  "episodes": 48,
+  "multi_turn_episodes": 48,
+  "tokens": 6646,
+  "mean_abs_diff": 0.008716792612595262,
+  "p99_abs_diff": 0.13640785217285156,
+  "max_abs_diff": 0.738037109375,
+  "mean_diff_sampler_minus_train": 0.0015049005107208076,
+  "later_turn_tokens": 4028,
+  "later_turn_mean_abs_diff": 0.008455204277076456,
+  "control_missing_stop_token_mean_abs_diff": 0.015357364845844107,
+  "adapter": "runs/curriculum_50b/step_00025"
+}

@@ -17,8 +17,11 @@ Logs go to runs/<name>/ for the dashboard:
 
 import argparse
 import json
-import time
 import math
+import shutil
+import signal
+import subprocess
+import time
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -26,7 +29,7 @@ from pathlib import Path
 import mlx.core as mx
 import mlx.nn as nn
 import mlx.optimizers as optim
-from mlx.utils import tree_flatten, tree_map
+from mlx.utils import tree_flatten, tree_map, tree_unflatten
 from mlx_lm import load
 from mlx_lm.tuner.trainer import grad_checkpoint
 from mlx_lm.tuner.utils import linear_to_lora_layers, load_adapters
@@ -183,13 +186,60 @@ def rescue_groups(jobs, eps, args, tok, deadline):
     return rescue
 
 
-def save_adapter(model, path, args):
-    path.mkdir(parents=True, exist_ok=True)
-    mx.save_safetensors(str(path / "adapters.safetensors"), dict(tree_flatten(model.trainable_parameters())))
-    (path / "adapter_config.json").write_text(json.dumps({
+def save_checkpoint(model, opt, path, args, step, curriculum):
+    """Write adapters, optimizer state and trainer state to a temporary directory, then
+    rename it, so an interrupted save never leaves a partial checkpoint."""
+    if path.exists():
+        raise FileExistsError(f"Checkpoint already exists: {path}")
+    tmp = path.with_name(path.name + ".partial")
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir(parents=True)
+    mx.save_safetensors(str(tmp / "adapters.safetensors"), dict(tree_flatten(model.trainable_parameters())))
+    mx.save_safetensors(str(tmp / "optimizer.safetensors"), dict(tree_flatten(opt.state)))
+    (tmp / "adapter_config.json").write_text(json.dumps({
         "fine_tune_type": "lora", "num_layers": args.lora_layers,
         "lora_parameters": {"rank": args.rank, "scale": args.scale, "dropout": 0.0},
     }, indent=2))
+    (tmp / "trainer_state.json").write_text(json.dumps({
+        "step": step, "time": time.time(), "run": args.name,
+        "verifier_version": env.VERIFIER_VERSION, "protocol_version": env.PROTOCOL_VERSION,
+        "curriculum": {"rate": curriculum.rate, "seen": dict(curriculum.seen)},
+    }))
+    tmp.rename(path)
+
+
+def load_optimizer(opt, model, path):
+    opt.init(model.trainable_parameters())
+    opt.state = tree_unflatten(list(mx.load(str(path / "optimizer.safetensors")).items()))
+
+
+def git_revision():
+    run = lambda *a: subprocess.run(["git", *a], cwd=HERE, capture_output=True, text=True).stdout.strip()
+    return {"commit": run("rev-parse", "HEAD"), "dirty": bool(run("status", "--porcelain", "--", "."))}
+
+
+class Stop(Exception):
+    """SIGTERM or SIGINT. Raised at once unless an update or save is in progress."""
+
+
+class Signals:
+    def __init__(self):
+        self.critical, self.pending = False, None
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            signal.signal(sig, self.handle)
+
+    def handle(self, signum, _frame):
+        self.pending = signal.Signals(signum).name
+        if not self.critical:
+            raise Stop(self.pending)
+
+    def __enter__(self):
+        self.critical = True
+
+    def __exit__(self, *exc):
+        self.critical = False
+        if self.pending and exc[0] is None:
+            raise Stop(self.pending)
 
 
 def run_eval(model, tok, args, log, step):
@@ -199,18 +249,21 @@ def run_eval(model, tok, args, log, step):
                          max_turns=args.max_turns, max_tokens=args.max_tokens,
                          show_schema=not args.hide_schema, batch_size=args.gen_batch,
                          live=live_writer(log, "eval", step, args.eval_k))
-    by_t = defaultdict(list)
+    by_t, tiers, splits = defaultdict(list), defaultdict(list), defaultdict(list)
     for e in eps:
-        by_t[e.task.template].append(float(e.outcome == "correct"))
-    tiers = defaultdict(list)
-    for e in eps:
-        tiers[e.task.tier].append(float(e.outcome == "correct"))
+        ok = float(e.outcome == "correct")
+        by_t[e.task.template].append(ok)
+        tiers[e.task.tier].append(ok)
+        splits[e.task.split].append(ok)
     row = {
         "step": step, "time": time.time(),
         "pass1": sum(e.outcome == "correct" for e in eps) / len(eps),
         "verifier_version": env.VERIFIER_VERSION, "protocol_version": env.PROTOCOL_VERSION,
         "questions": len({e.task.question for e in eps}), "attempts": len(eps),
-        "evaluation_split": "reserved parameters and unseen databases; constant templates share wording",
+        "evaluation_split": "unseen databases; held-out templates, reserved parameters, or shared wording",
+        "by_split": {k: sum(v) / len(v) for k, v in sorted(splits.items())},
+        "split_attempts": {k: len(v) for k, v in sorted(splits.items())},
+        "heldout_templates": list(env.HELDOUT_TEMPLATES),
         "by_template": {k: sum(v) / len(v) for k, v in by_t.items()},
         "by_tier": {str(k): sum(v) / len(v) for k, v in sorted(tiers.items())},
         "outcomes": dict(Counter(e.outcome for e in eps)),
@@ -219,7 +272,7 @@ def run_eval(model, tok, args, log, step):
     log.write(f"eval_samples/step_{step:05d}.json",
               [episode_record(e, i // args.eval_k, 0.0) for i, e in enumerate(eps)])
     log.append("evals.jsonl", row)
-    print(f"[eval step {step}] pass@1 {row['pass1']:.3f}  tiers {row['by_tier']}")
+    print(f"[eval step {step}] pass@1 {row['pass1']:.3f}  splits {row['by_split']}  tiers {row['by_tier']}")
     return row
 
 
@@ -228,6 +281,9 @@ def main():
     ap.add_argument("--name", default=time.strftime("run_%Y%m%d_%H%M%S"))
     ap.add_argument("--model", default=str(HERE.parent / "models/MiniCPM5-1B"))
     ap.add_argument("--adapter", help="Warm-start adapter weights; starts a fresh optimizer")
+    ap.add_argument("--resume", help="Checkpoint to continue: restores adapters, optimizer state, step and curriculum")
+    ap.add_argument("--max-hours", type=float, default=0, help="stop before a step that would end after this wall-clock budget (0 = no limit)")
+    ap.add_argument("--max-nonfinite", type=int, default=3, help="stop after this many consecutive skipped nonfinite updates")
     ap.add_argument("--steps", type=int, default=200)
     ap.add_argument("--prompts", type=int, default=16, help="distinct tasks per step")
     ap.add_argument("--group", type=int, default=8, help="rollouts per task")
@@ -268,8 +324,12 @@ def main():
     ap.add_argument("--teacher-wait", type=float, default=60, help="seconds to wait for teacher answers after rollouts")
     args = ap.parse_args()
 
-    if args.adapter:
-        adapter_config = json.loads((Path(args.adapter) / "adapter_config.json").read_text())
+    if args.adapter and args.resume:
+        raise ValueError("Use --adapter or --resume, not both")
+    start_time = time.time()
+    resume_state = json.loads((Path(args.resume) / "trainer_state.json").read_text()) if args.resume else None
+    if args.adapter or args.resume:
+        adapter_config = json.loads((Path(args.adapter or args.resume) / "adapter_config.json").read_text())
         args.rank = adapter_config["lora_parameters"]["rank"]
         args.scale = adapter_config["lora_parameters"]["scale"]
         args.lora_layers = adapter_config["num_layers"]
@@ -279,7 +339,8 @@ def main():
     log = RunLog(run)
     log.write("config.json", {**vars(args), "started": time.time(),
                              "verifier_version": env.VERIFIER_VERSION, "protocol_version": env.PROTOCOL_VERSION,
-                             "optimizer_restored": False, "evaluation_db": str(env.EVAL_DB_PATH)})
+                             "optimizer_restored": bool(args.resume), "start_step": resume_state["step"] if resume_state else 0,
+                             "evaluation_db": str(env.EVAL_DB_PATH), "git": git_revision()})
     log.status(phase="loading", step=0)
     set_memory_budget(args.mem_gb)
 
@@ -287,140 +348,194 @@ def main():
     mx.random.seed(args.seed)
     model, tok = load(args.model)
     model.freeze()
-    if args.adapter:
-        model = load_adapters(model, args.adapter)
+    if args.adapter or args.resume:
+        model = load_adapters(model, args.adapter or args.resume)
     else:
         linear_to_lora_layers(model, args.lora_layers, {"rank": args.rank, "scale": args.scale, "dropout": 0.0})
     model.eval()
     n_train = sum(v.size for _, v in tree_flatten(model.trainable_parameters()))
     print(f"trainable params: {n_train / 1e6:.1f}M")
     opt = optim.Adam(learning_rate=args.lr)
+    first_step = 1
+    if resume_state:
+        if resume_state["verifier_version"] != env.VERIFIER_VERSION:
+            print(f"resuming a {resume_state['verifier_version']} checkpoint under {env.VERIFIER_VERSION}")
+        load_optimizer(opt, model, Path(args.resume))
+        first_step = resume_state["step"] + 1
     tiers = tuple(int(t) for t in args.tiers.split(","))
     teacher = Teacher(args.teacher, max_turns=args.max_turns, effort=args.teacher_effort,
                       show_schema=not args.hide_schema) if args.teacher else None
     generated = evolve.load_accepted()
     print(f"templates: {len(env.BUILTIN)} built in, {len(generated)} generated earlier")
     curriculum = Curriculum(hard_bonus=0.1 if teacher else 0.0)
+    if resume_state:
+        curriculum.rate = {k: v for k, v in resume_state["curriculum"]["rate"].items() if k in env.TEMPLATES}
+        curriculum.seen.update({k: v for k, v in resume_state["curriculum"]["seen"].items() if k in env.TEMPLATES})
     # Template generation calls the API and validates with a solver; it runs beside
     # training and its results are picked up at the start of a later step.
-    evolver, evolving, evolve_spent = ThreadPoolExecutor(1), None, 0.0
+    evolver_state = {"pool": ThreadPoolExecutor(1), "future": None, "spent": 0.0}
 
-    if args.eval_every:
-        run_eval(model, tok, args, log, 0)
-
-    for step in range(1, args.steps + 1):
-        t0 = time.time()
-        new_templates = []
-        if evolving and evolving.done():
-            try:
-                accepted, stats = evolving.result()
-                for spec in accepted:
-                    env.add_template(spec)
-                new_templates = [spec["name"] for spec in accepted]
-                evolve_spent += stats["spent"]
-                print(f"  evolve: {stats['accepted']} of {stats['proposed']} new templates accepted: {new_templates}")
-            except Exception as e:  # API or network failure: keep training on the templates we have
-                print(f"  evolve failed: {type(e).__name__}: {str(e)[:160]}")
-            evolving = None
-        tasks = env.sample_tasks(args.prompts, seed=args.seed * 1_000_003 + step, tiers=tiers,
-                                 weights=curriculum.weights() if args.curriculum else None)
-        group_tasks = [t for t in tasks for _ in range(args.group)]
-
-        def progress(turn, active, gen_tokens, secs):
-            log.status(phase="rollout", step=step, turn=turn, active=active, gen_tokens=gen_tokens, seconds=secs)
-
-        # The teacher works on the same questions over the network while the student
-        # rolls out locally, so its latency hides behind compute we pay for anyway.
-        teacher_jobs = teacher.submit(tasks) if teacher else {}
-        log.status(phase="rollout", step=step, turn=0)
-        eps, rstats = rollout(model, tok, group_tasks, temp=args.temp, max_turns=args.max_turns,
-                              max_tokens=args.max_tokens, show_schema=not args.hide_schema,
-                              batch_size=args.gen_batch, on_turn=progress,
-                              live=live_writer(log, "rollout", step, args.group), prose_penalty=args.prose_penalty,
-                              no_answer_reward=args.no_answer_reward)
-        t_roll = time.time() - t0
-        curriculum.update(eps)
-        if args.evolve_every and step % args.evolve_every == 0 and not evolving:
-            if weak := curriculum.weakest_skills(args.evolve_skills, min_seen=args.evolve_min_seen):
-                evolving = evolver.submit(evolve.evolve, weak, args.evolve_n, args.evolve_model)
-                print(f"  evolve: generating templates for {weak}")
-
-        rescue = rescue_groups(teacher_jobs, eps, args, tok, deadline=time.time() + args.teacher_wait) if teacher else {}
-
-        batch, records, kept = [], [], 0
-        for g in range(args.prompts):
-            group = eps[g * args.group:(g + 1) * args.group]
-            if g in rescue:
-                group = group[:-1] + [rescue[g]]
-            mean = sum(e.reward for e in group) / len(group)
-            student_mean = sum(e.reward for e in group if e.source == "student") / sum(e.source == "student" for e in group)
-            if any(e.reward != mean for e in group):
-                kept += 1
-            for e in group:
-                adv = e.reward - mean
-                if g in rescue and e.source == "student":
-                    # Score students against each other, not against the teacher. Pushing
-                    # every failed attempt below the teacher taught the model to stop
-                    # querying ("answered without a query" went 48 -> 76 of 128 in three
-                    # steps); relative to each other, trying still beats not trying.
-                    adv = e.reward - student_mean
-                records.append(episode_record(e, g, adv))
-                if adv != 0:
-                    batch.append((e.tokens, e.mask, adv))
-
-        log.status(phase="train", step=step)
-        t1 = time.time()
-        loss, grad_norm, n_tok = train_step(model, opt, batch, args.temp, args.micro_tokens, args.max_grad_norm) if batch else (0.0, 0.0, 0)
-        t_train = time.time() - t1
-
-        rewards = [e.reward for e in eps]
-        submits = [e for e in eps if e.final_sql is not None]
-        literal = [e for e in submits if env.is_literal(e.final_sql)]
-        by_t, by_tier = defaultdict(list), defaultdict(list)
-        for e in eps:
-            by_t[e.task.template].append(e.reward)
-            by_tier[e.task.tier].append(e.reward)
-        row = {
-            "step": step, "time": time.time(),
-            "reward_mean": sum(rewards) / len(rewards),
-            "outcomes": dict(Counter(e.outcome for e in eps)),
-            "by_template": {k: sum(v) / len(v) for k, v in by_t.items()},
-            "by_tier": {str(k): sum(v) / len(v) for k, v in sorted(by_tier.items())},
-            "turns_mean": sum(e.turns for e in eps) / len(eps),
-            "literal_frac": len(literal) / max(len(submits), 1),
-            "literal_correct_frac": sum(e.outcome == "correct" for e in literal) / max(sum(e.outcome == "correct" for e in eps), 1),
-            "gen_tokens_mean": sum(sum(e.mask) for e in eps) / len(eps),
-            "prose_tokens_mean": sum(e.prose_tokens for e in eps) / len(eps),
-            "groups_kept": kept, "groups_total": args.prompts,
-            "loss": loss, "grad_norm": grad_norm, "train_tokens": n_tok,
-            "rollout_s": t_roll, "train_s": t_train,
-            "gen_tps": rstats["gen_tokens"] / max(rstats["seconds"], 1e-9),
-            "peak_mem_gb": mx.get_peak_memory() / 1024**3,
-        }
-        row |= {"curriculum": curriculum.snapshot(), "new_templates": new_templates, "evolve_spent": evolve_spent}
-        if teacher:
-            dead = sum(1 for g in range(args.prompts)
-                       if not any(e.outcome == "correct" for e in eps[g * args.group:(g + 1) * args.group]))
-            row |= {"teacher_dead_groups": dead, "teacher_rescued": len(rescue), "teacher_spent": teacher.spent}
-        mx.reset_peak_memory()
-        log.append("metrics.jsonl", row)
-        log.write(f"samples/step_{step:05d}.json", records)
-        print(f"step {step:4d}  reward {row['reward_mean']:.3f}  kept {kept}/{args.prompts}  "
-              f"turns {row['turns_mean']:.2f}  loss {loss:+.4f}  |g| {grad_norm:.3f}  "
-              f"roll {t_roll:.0f}s train {t_train:.0f}s  {row['outcomes']}")
-
-        if args.save_every and step % args.save_every == 0:
-            save_adapter(model, run / f"step_{step:05d}", args)
-        if args.eval_every and step % args.eval_every == 0:
+    signals = Signals()
+    log.weights_step = first_step - 1
+    step, last_saved, nonfinite_run, stop_reason = first_step - 1, None, 0, "completed"
+    deadline = start_time + args.max_hours * 3600 if args.max_hours else None
+    step_times, eval_s = [], 0.0
+    try:
+        if args.eval_every:
+            eval_s = run_eval(model, tok, args, log, step)["seconds"]
+        while step < args.steps:
+            if deadline:
+                # Leave room for the next step, its scheduled evaluation and the final one.
+                expected = max(step_times[-3:], default=0) + eval_s * (1 + ((step + 1) % args.eval_every == 0 if args.eval_every else 0))
+                if time.time() + expected > deadline:
+                    stop_reason = "time limit"
+                    break
+            step += 1
+            nonfinite_run = train_one_step(step, args, model, tok, opt, log, curriculum, teacher, evolver_state, tiers,
+                                           signals, nonfinite_run)
+            step_times.append(time.time() - log.step_started)
+            if args.save_every and step % args.save_every == 0:
+                with signals:
+                    save_checkpoint(model, opt, run / f"step_{step:05d}", args, step, curriculum)
+                last_saved = step
+            if args.eval_every and step % args.eval_every == 0:
+                eval_s = run_eval(model, tok, args, log, step)["seconds"]
+        if args.eval_every and step % args.eval_every and step >= first_step:
             run_eval(model, tok, args, log, step)
+        with signals:
+            save_checkpoint(model, opt, run / "final", args, step, curriculum)
+    except BaseException as exc:
+        # Weights only change inside the protected update, so they are a valid state after weights_step.
+        done = log.weights_step
+        if done >= first_step and last_saved != done and not isinstance(exc, FileExistsError):
+            signals.critical = True
+            path = run / f"interrupted_step_{done:05d}"
+            if not path.exists():
+                save_checkpoint(model, opt, path, args, done, curriculum)
+                print(f"saved {path}")
+        raise
+    finally:
+        evolver_state["pool"].shutdown(wait=False, cancel_futures=True)
+        if teacher:
+            teacher.close()
+    log.status(phase="done", step=step, stop_reason=stop_reason, elapsed_hours=(time.time() - start_time) / 3600)
 
-    save_adapter(model, run / "final", args)
-    if evolving:
-        evolving.result()
-    evolver.shutdown(wait=True)
+
+def train_one_step(step, args, model, tok, opt, log, curriculum, teacher, evolver_state, tiers, signals, nonfinite_run):
+    """One GRPO step. Returns the number of consecutive skipped nonfinite updates."""
+    t0 = log.step_started = time.time()
+    new_templates = []
+    evolving = evolver_state["future"]
+    if evolving and evolving.done():
+        try:
+            accepted, stats = evolving.result()
+            for spec in accepted:
+                env.add_template(spec)
+            new_templates = [spec["name"] for spec in accepted]
+            evolver_state["spent"] += stats["spent"]
+            print(f"  evolve: {stats['accepted']} of {stats['proposed']} new templates accepted: {new_templates}")
+        except Exception as e:  # API or network failure: keep training on the templates we have
+            print(f"  evolve failed: {type(e).__name__}: {str(e)[:160]}")
+        evolver_state["future"] = None
+    tasks = env.sample_tasks(args.prompts, seed=args.seed * 1_000_003 + step, tiers=tiers,
+                             weights=curriculum.weights() if args.curriculum else None)
+    group_tasks = [t for t in tasks for _ in range(args.group)]
+
+    def progress(turn, active, gen_tokens, secs):
+        log.status(phase="rollout", step=step, turn=turn, active=active, gen_tokens=gen_tokens, seconds=secs)
+
+    # The teacher works on the same questions over the network while the student
+    # rolls out locally, so its latency hides behind compute we pay for anyway.
+    teacher_jobs = teacher.submit(tasks) if teacher else {}
+    log.status(phase="rollout", step=step, turn=0)
+    eps, rstats = rollout(model, tok, group_tasks, temp=args.temp, max_turns=args.max_turns,
+                          max_tokens=args.max_tokens, show_schema=not args.hide_schema,
+                          batch_size=args.gen_batch, on_turn=progress,
+                          live=live_writer(log, "rollout", step, args.group), prose_penalty=args.prose_penalty,
+                          no_answer_reward=args.no_answer_reward)
+    t_roll = time.time() - t0
+    curriculum.update(eps)
+    if args.evolve_every and step % args.evolve_every == 0 and not evolver_state["future"]:
+        if weak := curriculum.weakest_skills(args.evolve_skills, min_seen=args.evolve_min_seen):
+            evolver_state["future"] = evolver_state["pool"].submit(evolve.evolve, weak, args.evolve_n, args.evolve_model)
+            print(f"  evolve: generating templates for {weak}")
+
+    rescue = rescue_groups(teacher_jobs, eps, args, tok, deadline=time.time() + args.teacher_wait) if teacher else {}
+
+    batch, records, kept = [], [], 0
+    for g in range(args.prompts):
+        group = eps[g * args.group:(g + 1) * args.group]
+        if g in rescue:
+            group = group[:-1] + [rescue[g]]
+        mean = sum(e.reward for e in group) / len(group)
+        student_mean = sum(e.reward for e in group if e.source == "student") / sum(e.source == "student" for e in group)
+        if any(e.reward != mean for e in group):
+            kept += 1
+        for e in group:
+            adv = e.reward - mean
+            if g in rescue and e.source == "student":
+                # Score students against each other, not against the teacher. Pushing
+                # every failed attempt below the teacher taught the model to stop
+                # querying ("answered without a query" went 48 -> 76 of 128 in three
+                # steps); relative to each other, trying still beats not trying.
+                adv = e.reward - student_mean
+            records.append(episode_record(e, g, adv))
+            if adv != 0:
+                batch.append((e.tokens, e.mask, adv))
+
+    log.status(phase="train", step=step)
+    t1 = time.time()
+    loss, grad_norm, n_tok, skipped = 0.0, 0.0, 0, False
+    if batch:
+        try:
+            with signals:
+                loss, grad_norm, n_tok = train_step(model, opt, batch, args.temp, args.micro_tokens, args.max_grad_norm)
+            nonfinite_run = 0
+        except FloatingPointError as exc:
+            skipped, nonfinite_run = True, nonfinite_run + 1
+            print(f"  {exc} ({nonfinite_run} in a row)")
+            if nonfinite_run >= args.max_nonfinite:
+                raise
+    t_train = time.time() - t1
+    log.weights_step = step
+
+    rewards = [e.reward for e in eps]
+    submits = [e for e in eps if e.final_sql is not None]
+    literal = [e for e in submits if env.is_literal(e.final_sql)]
+    by_t, by_tier = defaultdict(list), defaultdict(list)
+    for e in eps:
+        # Rates count correct submissions; reward shaping is reported by reward_mean.
+        by_t[e.task.template].append(float(e.outcome == "correct"))
+        by_tier[e.task.tier].append(float(e.outcome == "correct"))
+    row = {
+        "step": step, "time": time.time(),
+        "reward_mean": sum(rewards) / len(rewards),
+        "outcomes": dict(Counter(e.outcome for e in eps)),
+        "by_template": {k: sum(v) / len(v) for k, v in by_t.items()},
+        "by_tier": {str(k): sum(v) / len(v) for k, v in sorted(by_tier.items())},
+        "turns_mean": sum(e.turns for e in eps) / len(eps),
+        "literal_frac": len(literal) / max(len(submits), 1),
+        "literal_correct_frac": sum(e.outcome == "correct" for e in literal) / max(sum(e.outcome == "correct" for e in eps), 1),
+        "gen_tokens_mean": sum(sum(e.mask) for e in eps) / len(eps),
+        "prose_tokens_mean": sum(e.prose_tokens for e in eps) / len(eps),
+        "groups_kept": kept, "groups_total": args.prompts,
+        "loss": loss, "grad_norm": grad_norm, "train_tokens": n_tok, "update_skipped_nonfinite": skipped,
+        "rollout_s": t_roll, "train_s": t_train,
+        "gen_tps": rstats["gen_tokens"] / max(rstats["seconds"], 1e-9),
+        "peak_mem_gb": mx.get_peak_memory() / 1024**3,
+    }
+    row |= {"curriculum": curriculum.snapshot(), "new_templates": new_templates, "evolve_spent": evolver_state["spent"]}
     if teacher:
-        teacher.close()
-    log.status(phase="done", step=args.steps)
+        dead = sum(1 for g in range(args.prompts)
+                   if not any(e.outcome == "correct" for e in eps[g * args.group:(g + 1) * args.group]))
+        row |= {"teacher_dead_groups": dead, "teacher_rescued": len(rescue), "teacher_spent": teacher.spent}
+    mx.reset_peak_memory()
+    log.append("metrics.jsonl", row)
+    log.write(f"samples/step_{step:05d}.json", records)
+    print(f"step {step:4d}  reward {row['reward_mean']:.3f}  kept {kept}/{args.prompts}  "
+          f"turns {row['turns_mean']:.2f}  loss {loss:+.4f}  |g| {grad_norm:.3f}  "
+          f"roll {t_roll:.0f}s train {t_train:.0f}s  {row['outcomes']}")
+    return nonfinite_run
 
 
 if __name__ == "__main__":

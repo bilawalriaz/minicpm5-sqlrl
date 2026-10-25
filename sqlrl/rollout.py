@@ -69,6 +69,7 @@ class Episode:
     source: str = "student"  # "teacher" for a rescued group's injected solution
     verifier_reason: str = ""
     prose_tokens: int = 0  # tokens of text outside function calls, across all turns
+    sample_logprobs: list = field(default_factory=list)  # sampler log-probability of each generated token
     cache: list = field(default=None, repr=False)
 
 
@@ -119,11 +120,15 @@ def _generate(model, tokenizer, prompts, caches, temp, max_tokens, batch_size, o
         mx.set_wired_limit(_wired_cap())
     uids = gen.insert(prompts, caches=caches)
     out = {u: [] for u in uids}
+    logprobs = {u: [] for u in uids}
     done = {}
     n_tokens = 0
     last_report = time.time()
     try:
         while responses := gen.next():
+            # One host transfer per decoding step, for training/sampling consistency checks.
+            for r, lp in zip(responses, mx.stack([r.logprobs[r.token] for r in responses]).tolist()):
+                logprobs[r.uid].append(lp)
             for r in responses:
                 out[r.uid].append(int(r.token))
                 n_tokens += 1
@@ -143,7 +148,7 @@ def _generate(model, tokenizer, prompts, caches, temp, max_tokens, batch_size, o
     finally:
         gen.close()
     mx.clear_cache()
-    return [(out[u], *done[u]) for u in uids], n_tokens
+    return [(out[u], *done[u], logprobs[u]) for u in uids], n_tokens
 
 
 def rollout(model, tokenizer, tasks, temp=1.0, max_turns=5, max_tokens=256,
@@ -197,8 +202,9 @@ def rollout(model, tokenizer, tasks, temp=1.0, max_turns=5, max_tokens=256,
                 temp, max_tokens, batch_size, report if live else None,
             )
             gen_tokens += n
-            for e, (toks, reason, cache) in zip(active, results):
+            for e, (toks, reason, cache, lps) in zip(active, results):
                 e.tokens += toks
+                e.sample_logprobs += lps
                 e.mask += [1] * len(toks)
                 e.turns += 1
                 e.cache, fed[id(e)] = cache, len(e.tokens)

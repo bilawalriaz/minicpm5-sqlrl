@@ -30,7 +30,7 @@ def run(monkeypatch, turns, *, max_turns=5):
     def generate(*args, **kwargs):
         text, reason = next(pending)
         tokens = tok.encode(text) + ([0] if reason == 'stop' else [])
-        return [(tokens, reason, [])], len(tokens)
+        return [(tokens, reason, [], [0.0] * len(tokens))], len(tokens)
 
     monkeypatch.setattr(engine, '_generate', generate)
     task = env.Task('count', 1, 'How many orders?', 'SELECT COUNT(*) FROM orders')
@@ -43,6 +43,7 @@ def test_submit_on_final_turn_is_accepted(monkeypatch):
     assert ep.outcome == 'correct' and ep.reward == 1
     assert ep.answer_rows == [(1200,)]
     assert len(ep.tokens) == len(ep.mask)
+    assert len(ep.sample_logprobs) == sum(ep.mask)
     assert not any(ep.mask[:ep.prompt_len])
 
 

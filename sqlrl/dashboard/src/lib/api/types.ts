@@ -10,6 +10,8 @@ export interface RunStatus {
   step: number;
   updated: number;
   error?: string;
+  /** Done phase only: "completed" or "time limit". */
+  stop_reason?: string;
   /** Rollout phase only. */
   turn?: number;
   active?: number;
@@ -49,6 +51,8 @@ export interface StepMetrics {
   groups_total: number;
   loss: number;
   grad_norm: number;
+  /** Absent on runs from before sql-v2.2. Those runs report mean reward in by_template and by_tier, not solve rates. */
+  update_skipped_nonfinite?: boolean;
   train_tokens: number;
   rollout_s: number;
   train_s: number;
@@ -86,6 +90,8 @@ export interface EvalRow {
   pass1: number;
   by_template: Record<string, number>;
   by_tier: Record<string, number>;
+  /** Solve rate per evaluation split: heldout_template, reserved_params, shared_wording. Absent before sql-v2.2. */
+  by_split?: Record<string, number>;
   outcomes: Partial<Record<Outcome, number>>;
   seconds: number;
 }

@@ -1,0 +1,128 @@
+{
+ "count_city: COUNT(DISTINCT name)": {
+  "sql-v2.1/train": "15/16",
+  "sql-v2.1/eval": "16/16",
+  "sql-v2.2/train": "0/16",
+  "sql-v2.2/eval": "0/16"
+ },
+ "cheap_products: price <= \\1": {
+  "sql-v2.1/train": "18/18",
+  "sql-v2.1/eval": "18/18",
+  "sql-v2.2/train": "0/18",
+  "sql-v2.2/eval": "0/18"
+ },
+ "signups_year: signup_date >= '\\1-01-01'": {
+  "sql-v2.1/train": "5/15",
+  "sql-v2.1/eval": "5/15",
+  "sql-v2.2/train": "0/15",
+  "sql-v2.2/eval": "0/15"
+ },
+ "avg_price_by_cat: AVG(DISTINCT price)": {
+  "sql-v2.1/train": "1/1",
+  "sql-v2.1/eval": "1/1",
+  "sql-v2.2/train": "0/1",
+  "sql-v2.2/eval": "0/1"
+ },
+ "frequent_customers: SELECT DISTINCT c.name": {
+  "sql-v2.1/train": "4/4",
+  "sql-v2.1/eval": "4/4",
+  "sql-v2.2/train": "0/4",
+  "sql-v2.2/eval": "0/4"
+ },
+ "frequent_customers: GROUP BY c.name": {
+  "sql-v2.1/train": "0/4",
+  "sql-v2.1/eval": "0/4",
+  "sql-v2.2/train": "0/4",
+  "sql-v2.2/eval": "0/4"
+ },
+ "frequent_customers: COUNT(*) >= \\1": {
+  "sql-v2.1/train": "0/4",
+  "sql-v2.1/eval": "0/4",
+  "sql-v2.2/train": "0/4",
+  "sql-v2.2/eval": "0/4"
+ },
+ "top_spenders: SELECT DISTINCT c.name": {
+  "sql-v2.1/train": "2/2",
+  "sql-v2.1/eval": "2/2",
+  "sql-v2.2/train": "0/2",
+  "sql-v2.2/eval": "0/2"
+ },
+ "top_spenders: GROUP BY c.name": {
+  "sql-v2.1/train": "0/2",
+  "sql-v2.1/eval": "2/2",
+  "sql-v2.2/train": "0/2",
+  "sql-v2.2/eval": "0/2"
+ },
+ "top_spenders: ": {
+  "sql-v2.1/train": "0/2",
+  "sql-v2.1/eval": "0/2",
+  "sql-v2.2/train": "0/2",
+  "sql-v2.2/eval": "0/2"
+ },
+ "best_category_year: ": {
+  "sql-v2.1/train": "2/3",
+  "sql-v2.1/eval": "0/3",
+  "sql-v2.2/train": "0/3",
+  "sql-v2.2/eval": "0/3"
+ },
+ "best_category_year: SUM(oi.quantity)": {
+  "sql-v2.1/train": "1/3",
+  "sql-v2.1/eval": "0/3",
+  "sql-v2.2/train": "0/3",
+  "sql-v2.2/eval": "0/3"
+ },
+ "best_category_year: COUNT(*)": {
+  "sql-v2.1/train": "0/3",
+  "sql-v2.1/eval": "0/3",
+  "sql-v2.2/train": "0/3",
+  "sql-v2.2/eval": "0/3"
+ },
+ "units_of_product: SUM(oi.quantity)": {
+  "sql-v2.1/train": "0/198",
+  "sql-v2.1/eval": "3/198",
+  "sql-v2.2/train": "0/198",
+  "sql-v2.2/eval": "0/198"
+ },
+ "units_of_product: COUNT(*)": {
+  "sql-v2.1/train": "0/198",
+  "sql-v2.1/eval": "0/198",
+  "sql-v2.2/train": "0/198",
+  "sql-v2.2/eval": "0/198"
+ },
+ "units_of_product: COALESCE(SUM(DISTINCT oi.quantity), 0)": {
+  "sql-v2.1/train": "0/198",
+  "sql-v2.1/eval": "1/198",
+  "sql-v2.2/train": "0/198",
+  "sql-v2.2/eval": "0/198"
+ },
+ "revenue_month: ": {
+  "sql-v2.1/train": "0/36",
+  "sql-v2.1/eval": "0/36",
+  "sql-v2.2/train": "0/36",
+  "sql-v2.2/eval": "0/36"
+ },
+ "revenue_month: SUM(oi.unit_price)": {
+  "sql-v2.1/train": "0/36",
+  "sql-v2.1/eval": "0/36",
+  "sql-v2.2/train": "0/36",
+  "sql-v2.2/eval": "0/36"
+ },
+ "distinct_buyers_cat: COUNT(o.customer_id)": {
+  "sql-v2.1/train": "0/6",
+  "sql-v2.1/eval": "0/6",
+  "sql-v2.2/train": "0/6",
+  "sql-v2.2/eval": "0/6"
+ },
+ "orders_by_country: COUNT(DISTINCT c.id)": {
+  "sql-v2.1/train": "0/5",
+  "sql-v2.1/eval": "0/5",
+  "sql-v2.2/train": "0/5",
+  "sql-v2.2/eval": "0/5"
+ },
+ "churned: SELECT customer_id FROM orders WHERE order_date LIKE '\\1-%' AND status != 'cancelled' EXCEPT": {
+  "sql-v2.1/train": "0/2",
+  "sql-v2.1/eval": "0/2",
+  "sql-v2.2/train": "0/2",
+  "sql-v2.2/eval": "0/2"
+ }
+}

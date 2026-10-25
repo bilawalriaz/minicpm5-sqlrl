@@ -1,0 +1,36 @@
+== runs/eval_v22/base.log
+mean pass@1 0.079   mean pass@4 0.267
+  tier 1: pass@1 0.138
+  tier 2: pass@1 0.100
+  tier 3: pass@1 0.000
+  heldout_template: pass@1 0.068 (44 attempts)
+  reserved_params: pass@1 0.078 (64 attempts)
+  shared_wording: pass@1 0.125 (8 attempts)
+attempt-weighted pass@1 0.078
+outcomes: {'no_query': 46, 'max_turns': 34, 'wrong': 15, 'correct': 9, 'length': 12}
+peak MLX memory 6.6GB
+30176 tokens in 71s (428 tok/s)
+== runs/eval_v22/step25.log
+mean pass@1 0.296   mean pass@4 0.633
+  tier 1: pass@1 0.425
+  tier 2: pass@1 0.163
+  tier 3: pass@1 0.300
+  heldout_template: pass@1 0.386 (44 attempts)
+  reserved_params: pass@1 0.250 (64 attempts)
+  shared_wording: pass@1 0.500 (8 attempts)
+attempt-weighted pass@1 0.319
+outcomes: {'correct': 37, 'no_query': 48, 'max_turns': 25, 'wrong': 4, 'length': 2}
+peak MLX memory 6.6GB
+17250 tokens in 57s (305 tok/s)
+== runs/eval_v22/v21final.log
+mean pass@1 0.929   mean pass@4 1.000
+  tier 1: pass@1 0.912
+  tier 2: pass@1 0.875
+  tier 3: pass@1 1.000
+  heldout_template: pass@1 0.977 (44 attempts)
+  reserved_params: pass@1 0.906 (64 attempts)
+  shared_wording: pass@1 0.875 (8 attempts)
+attempt-weighted pass@1 0.931
+outcomes: {'correct': 108, 'wrong': 8}
+peak MLX memory 4.6GB
+6058 tokens in 14s (446 tok/s)

@@ -139,6 +139,12 @@ function OutcomeChart({ metrics, className }: { metrics: StepMetrics[]; classNam
 
 const BUCKETS = 8;
 
+const SPLIT_LABELS: Record<string, string> = {
+  heldout_template: "Held-out templates",
+  reserved_params: "Reserved parameters",
+  shared_wording: "Shared wording",
+};
+
 /** A rate per row (template or skill) over training, in equal step buckets, plus the first and last eval. */
 function RateGrid({ title, rowLabel, metrics, rates, evals }: {
   title: string;
@@ -326,8 +332,16 @@ export function MetricsPanel({ run }: { run: RunDetail }) {
     deadGroups: r.teacher_dead_groups,
     rescued: r.teacher_rescued,
   }));
-  const evalRows = run.evals.map((e) => ({ step: e.step, pass1: e.pass1, ...Object.fromEntries(Object.entries(e.by_tier).map(([t, v]) => [`tier${t}`, v])) }));
+  const evalRows = run.evals.map((e) => ({
+    step: e.step,
+    pass1: e.pass1,
+    ...Object.fromEntries(Object.entries(e.by_tier).map(([t, v]) => [`tier${t}`, v])),
+    ...e.by_split,
+  }));
   const tiers = Object.keys(firstEval?.by_tier ?? {});
+  const splits = Object.keys(firstEval?.by_split ?? {});
+  // Before sql-v2.2, training by_template held mean reward; evaluation always held solve rates.
+  const rateLabel = m[0].update_skipped_nonfinite === undefined ? "Reward" : "Solve rate";
 
   return (
     <div className="flex flex-col gap-4">
@@ -354,6 +368,7 @@ export function MetricsPanel({ run }: { run: RunDetail }) {
           series={[
             { key: "pass1", label: "All", color: "var(--color-chart-1)" },
             ...tiers.map((t, i) => ({ key: `tier${t}`, label: `Tier ${t}`, color: `var(--color-chart-${i + 3})` })),
+            ...splits.map((k, i) => ({ key: k, label: SPLIT_LABELS[k] ?? k, color: `var(--color-chart-${i + 6})` })),
           ]}
         />
         <OutcomeChart metrics={m} />
@@ -420,7 +435,7 @@ export function MetricsPanel({ run }: { run: RunDetail }) {
             addedAt={Object.fromEntries(m.flatMap((r) => (r.new_templates ?? []).map((t) => [t, r.step])))}
           />
           <RateGrid
-            title="Reward by skill"
+            title={`${rateLabel} by skill`}
             rowLabel="Skill"
             metrics={m}
             evals={run.evals}
@@ -428,7 +443,7 @@ export function MetricsPanel({ run }: { run: RunDetail }) {
           />
         </>
       )}
-      <RateGrid title="Reward by question type" rowLabel="Template" metrics={m} evals={run.evals} rates={(byTemplate) => byTemplate} />
+      <RateGrid title={`${rateLabel} by question type`} rowLabel="Template" metrics={m} evals={run.evals} rates={(byTemplate) => byTemplate} />
       <p className="text-body-2-regular text-text-secondary tabular-nums">Peak MLX memory last step: {last.peak_mem_gb.toFixed(1)} GB</p>
     </div>
   );

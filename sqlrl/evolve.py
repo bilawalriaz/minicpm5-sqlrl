@@ -18,6 +18,7 @@ import string
 import time
 import itertools
 import math
+from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
 
 import env
@@ -88,7 +89,7 @@ def value_lists():
         f"order statuses: {env.STATUSES}",
         f"product names: {names}",
         f"some customer names: {customers}",
-        "order dates: 2023-01-01 to 2025-12-28; signup dates: 2022-01-01 to 2024-12-28",
+        "order dates: mostly 2023 to 2025; signup dates: mostly 2022 to 2024 (other fixtures extend the ranges)",
         "prices: 3 to 300; quantities per order line: 1 to 5; orders per customer: about 0 to 14",
     ])
 
@@ -97,7 +98,7 @@ def examples(skill):
     rng = random.Random(0)
     lines = []
     for name, skills in env.SKILLS.items():
-        if skill in skills:
+        if skill in skills and name not in env.HELDOUT_TEMPLATES:
             q, sql = env.TEMPLATES[name][1](rng)
             lines.append(f"- {name}: {q}\n  SQL: {sql}")
     return "\n".join(lines) or "(none yet)"
@@ -152,6 +153,59 @@ def check_structure(spec):
     return None
 
 
+def signature(rows):
+    return frozenset(env.Counter(tuple(env._norm(v) for v in row) for row in rows).items())
+
+
+def eval_signatures(cons):
+    """Results of every evaluation question on the training fixtures. A generated question
+    with identical results everywhere asks the same thing in other words."""
+    out = set()
+    for name in env.BUILTIN:
+        for q, sql in (env._questions(name) if name in env.HELDOUT_TEMPLATES else env.reserved_questions(name)):
+            out.add(tuple(signature(env.execute(con, sql)[0]) for con in cons))
+    return out
+
+
+def _top_level(sql, start, stops):
+    """End of the clause starting at `start`: a stop keyword at parenthesis depth 0,
+    the closing parenthesis of an enclosing subquery, or the end of the statement."""
+    depth, i = 0, start
+    while i < len(sql):
+        c = sql[i]
+        if c == "'":
+            i = sql.index("'", i + 1)
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            if depth == 0:
+                return i
+            depth -= 1
+        elif depth == 0 and (m := re.match(r"\s+(" + stops + r")\b", sql[i:], re.I)):
+            return i
+        i += 1
+    return len(sql.rstrip().rstrip(";"))
+
+
+def ablations(sql):
+    """The reference without HAVING and without each top-level condition of the outer WHERE."""
+    out = {}
+    if m := re.search(r"\s+HAVING\s", sql, re.I):
+        end = _top_level(sql, m.end(), r"ORDER\s+BY|LIMIT|UNION|EXCEPT|INTERSECT")
+        out["HAVING"] = sql[:m.start()] + sql[end:]
+    if m := re.search(r"\s+WHERE\s", sql, re.I):
+        end = _top_level(sql, m.end(), r"GROUP\s+BY|HAVING|ORDER\s+BY|LIMIT|UNION|EXCEPT|INTERSECT")
+        parts, start = [], m.end()
+        while (cut := _top_level(sql[:end], start, r"AND")) < end:
+            parts.append(sql[start:cut].strip())
+            start = cut + re.match(r"\s+AND\s+", sql[cut:], re.I).end()
+        parts.append(sql[start:end].strip())
+        for i, part in enumerate(parts):
+            rest = parts[:i] + parts[i + 1:]
+            out[f"WHERE condition {part!r}"] = sql[:m.start()] + (" WHERE " + " AND ".join(rest) if rest else "") + sql[end:]
+    return out
+
+
 def normalise(sql):
     return re.sub(r"\s+", " ", sql.strip().rstrip(";")).lower()
 
@@ -168,15 +222,32 @@ def validate(spec, teacher, known_sql):
         combinations = math.prod(len(spec["params"][k]) for k in keys)
         if combinations > 256:
             return False, "more than 256 parameter combinations; narrow the template"
-        questions = {}
+        questions, effective = {}, set()
+        held_out = eval_signatures(cons)
         for values_tuple in itertools.product(*(spec["params"][k] for k in keys)):
             values = dict(zip(keys, values_tuple))
             q, sql = spec["question"].format(**values), spec["sql"].format(**values)
+            results = []
             for i, con in enumerate(cons):
-                _, err = env.execute(con, sql, require_table=True, deterministic=True)
+                rows, err = env.execute(con, sql, require_table=True, deterministic=True)
                 if err:
                     return False, f"reference SQL fails on database {i}: {err}"
+                if env.tie_dependent(con, sql):
+                    return False, f"reference result depends on tie order on database {i}: {q}"
+                results.append(signature(rows))
+            if not any(v is not None for row in env.execute(cons[0], sql)[0] for v in row):
+                return False, f"empty or NULL answer on the primary database: {q}"
+            if len(set(results)) == 1:
+                return False, f"same answer on every database, so a hard-coded value would pass: {q}"
+            if tuple(results) in held_out:
+                return False, f"same results as an evaluation question: {q}"
+            for label, variant in ablations(spec["sql"]).items():
+                rows = [env.execute(con, variant.format(**values))[0] for con in cons]
+                if any(r is None or signature(r) != res for r, res in zip(rows, results)):
+                    effective.add(label)
             questions.setdefault(q, sql)
+        if vacuous := sorted(set(ablations(spec["sql"])) - effective):
+            return False, f"removing {vacuous[0]} never changes the answer"
         # Validate different parameter choices rather than repeated random draws.
         selected = list(questions.items())[:3]
         solved = sum(teacher.solve(env.Task(spec["name"], spec["tier"], q, sql))["correct"]
@@ -221,6 +292,22 @@ def evolve(skills, n, model="glm-5.3-flash", workers=4):
     return accepted, {"proposed": len(specs), "accepted": len(accepted), "spent": spent}
 
 
+def revalidate():
+    """Apply the current data checks to accepted templates; earlier solver results stand."""
+    con = connect()
+    solved = SimpleNamespace(solve=lambda task: {"correct": True})
+    for name, target, skills, tier, question, sql, params in con.execute(
+            "SELECT name, target_skill, skills, tier, question, sql, params FROM templates WHERE status='accepted'").fetchall():
+        spec = {"name": name + "_recheck", "target_skill": target, "skills": json.loads(skills), "tier": tier,
+                "question": question, "sql": sql, "params": json.loads(params)}
+        ok, reason = validate(spec, solved, set())
+        if not ok:
+            con.execute("UPDATE templates SET status='rejected', reason=? WHERE name=?", (f"revalidation: {reason}", name))
+            print(f"rejected {name}: {reason}")
+    con.commit()
+    con.close()
+
+
 def load_accepted():
     """Register every accepted template with env. Returns their names."""
     con = connect()
@@ -240,8 +327,11 @@ if __name__ == "__main__":
     ap.add_argument("--n", type=int, default=2, help="templates to propose per skill")
     ap.add_argument("--model", default="glm-5.3-flash")
     ap.add_argument("--list", action="store_true")
+    ap.add_argument("--revalidate", action="store_true", help="recheck accepted templates against the current data checks")
     args = ap.parse_args()
-    if args.list:
+    if args.revalidate:
+        revalidate()
+    elif args.list:
         for status, name, skill, reason, q in connect().execute(
                 "SELECT status, name, target_skill, reason, question FROM templates ORDER BY id"):
             print(f"{status:8s} {name} [{skill}] {reason}\n         {q}")

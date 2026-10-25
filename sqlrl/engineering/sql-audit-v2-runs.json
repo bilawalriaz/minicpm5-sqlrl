@@ -1,0 +1,26 @@
+{
+  "runs": [
+    "verifier_v2_smoke",
+    "verifier_v21_check"
+  ],
+  "previous_fixtures": "sql-v2.1",
+  "verifier_version": "sql-v2.2",
+  "comparison": "SQL semantics on the three original databases plus four training fixtures of each version; the submission protocol is not regraded",
+  "files": 4,
+  "counts": {
+    "no_recorded_submission": 12,
+    "recorded_accepted_sql-v2.1_accepted_sql-v2.2_accepted": 73,
+    "recorded_rejected_sql-v2.1_rejected_sql-v2.2_rejected": 11
+  },
+  "by_source": {
+    "student": {
+      "recorded_accepted_sql-v2.1_accepted_sql-v2.2_accepted": 70,
+      "recorded_rejected_sql-v2.1_rejected_sql-v2.2_rejected": 11
+    },
+    "teacher": {
+      "recorded_accepted_sql-v2.1_accepted_sql-v2.2_accepted": 3
+    }
+  },
+  "newly_rejected_by_template": {},
+  "examples": []
+}

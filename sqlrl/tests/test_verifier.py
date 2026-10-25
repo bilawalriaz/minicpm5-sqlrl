@@ -109,3 +109,116 @@ def test_nondeterministic_submissions_and_references(cons):
     assert not env.grade(cons, 'SELECT random() FROM products LIMIT 1', 'SELECT id FROM products LIMIT 1')[0]
     with pytest.raises(ValueError, match='Reference query failed'):
         env.grade(cons, 'SELECT id FROM products', 'SELECT random() FROM products')
+
+
+def questions(name):
+    return sorted({env.TEMPLATES[name][1](random.Random(s)) for s in range(400)})
+
+
+# Plausible wrong rewrites of built-in references. Eleven passed every sql-v2.1 fixture for
+# some parameter (engineering/wrong-sql-v21-vs-v22.json); the others guard earlier fixes.
+WRONG = [
+    ("count_city", r"COUNT\(\*\)", "COUNT(DISTINCT name)"),
+    ("cheap_products", r"price < (\d+)", r"price <= \1"),
+    ("signups_year", r"signup_date LIKE '(\d+)-%'", r"signup_date >= '\1-01-01'"),
+    ("avg_price_by_cat", r"AVG\(price\)", "AVG(DISTINCT price)"),
+    ("frequent_customers", r"SELECT c.name", "SELECT DISTINCT c.name"),
+    ("frequent_customers", r"GROUP BY c.id", "GROUP BY c.name"),
+    ("frequent_customers", r"COUNT\(\*\) > (\d+)", r"COUNT(*) >= \1"),
+    ("top_spenders", r"SELECT c.name", "SELECT DISTINCT c.name"),
+    ("top_spenders", r"GROUP BY c.id", "GROUP BY c.name"),
+    ("top_spenders", r"WHERE o.status != 'cancelled' ", ""),
+    ("best_category_year", r"o.status = 'shipped' AND ", ""),
+    ("best_category_year", r"SUM\(oi.quantity \* oi.unit_price\)", "SUM(oi.quantity)"),
+    ("best_category_year", r"SUM\(oi.quantity \* oi.unit_price\)", "COUNT(*)"),
+    ("units_of_product", r"COALESCE\(SUM\(oi.quantity\), 0\)", "SUM(oi.quantity)"),
+    ("units_of_product", r"COALESCE\(SUM\(oi.quantity\), 0\)", "COUNT(*)"),
+    ("units_of_product", r"COALESCE\(SUM\(oi.quantity\), 0\)", "COALESCE(SUM(DISTINCT oi.quantity), 0)"),
+    ("revenue_month", r"o.status = 'shipped' AND ", ""),
+    ("revenue_month", r"SUM\(oi.quantity \* oi.unit_price\)", "SUM(oi.unit_price)"),
+    ("distinct_buyers_cat", r"COUNT\(DISTINCT o.customer_id\)", "COUNT(o.customer_id)"),
+    ("orders_by_country", r"COUNT\(\*\)", "COUNT(DISTINCT c.id)"),
+    ("churned", r"SELECT DISTINCT customer_id FROM orders WHERE order_date LIKE '(\d+)-%' EXCEPT",
+     r"SELECT customer_id FROM orders WHERE order_date LIKE '\1-%' AND status != 'cancelled' EXCEPT"),
+]
+
+# Different SQL with the reference's meaning must still pass.
+RIGHT = [
+    ("count_city", r"SELECT COUNT\(\*\) FROM customers WHERE city = ('[^']+')", r"SELECT COUNT(id) FROM customers c WHERE c.city IN (\1)"),
+    ("cheap_products", r"SELECT name FROM products WHERE category = ('[^']+') AND price < (\d+)",
+     r"SELECT p.name FROM products p WHERE p.price < \2 AND p.category = \1 ORDER BY p.name"),
+    ("signups_year", r"signup_date LIKE '(\d+)-%'", r"signup_date BETWEEN '\1-01-01' AND '\1-12-31'"),
+    ("frequent_customers", r"GROUP BY c.id", "GROUP BY c.id, c.name"),
+    ("never_ordered", r".*", "SELECT p.name FROM products p LEFT JOIN order_items oi ON oi.product_id = p.id WHERE oi.product_id IS NULL"),
+    ("units_of_product", r"COALESCE\(SUM\(oi.quantity\), 0\)", "IFNULL(TOTAL(oi.quantity), 0)"),
+    ("churned", r"SELECT COUNT\(\*\) FROM \(SELECT DISTINCT customer_id FROM orders WHERE order_date LIKE '(\d+)-%' EXCEPT SELECT customer_id FROM orders WHERE order_date LIKE '(\d+)-%'\)",
+     r"SELECT COUNT(DISTINCT customer_id) FROM orders WHERE order_date LIKE '\1-%' AND customer_id NOT IN (SELECT customer_id FROM orders WHERE order_date LIKE '\2-%')"),
+    ("top_spenders", r"ORDER BY SUM\(oi.quantity \* oi.unit_price\) DESC", "ORDER BY -SUM(oi.unit_price * oi.quantity)"),
+    ("distinct_buyers_cat", r".*JOIN products p ON p.id = oi.product_id WHERE p.category = ('[^']+')",
+     r"SELECT COUNT(*) FROM customers WHERE id IN (SELECT o.customer_id FROM orders o JOIN order_items oi ON oi.order_id = o.id JOIN products p ON p.id = oi.product_id WHERE p.category = \1)"),
+]
+
+
+@pytest.mark.parametrize("db", [env.DB_PATH, env.EVAL_DB_PATH], ids=["train", "eval"])
+def test_plausible_wrong_sql_rejected_for_every_parameter(db):
+    import re
+    with ExitStack() as stack:
+        connections = [stack.enter_context(closing(c)) for c in env.verifier_connections(db)]
+        for name, pattern, replacement in WRONG:
+            for question, gold in questions(name):
+                wrong = re.sub(pattern, replacement, gold)
+                assert wrong != gold, (name, pattern)
+                assert not env.grade(connections, wrong, gold)[0], (question, wrong)
+
+
+@pytest.mark.parametrize("db", [env.DB_PATH, env.EVAL_DB_PATH], ids=["train", "eval"])
+def test_equivalent_sql_accepted_for_every_parameter(db):
+    import re
+    with ExitStack() as stack:
+        connections = [stack.enter_context(closing(c)) for c in env.verifier_connections(db)]
+        for name, pattern, replacement in RIGHT:
+            for question, gold in questions(name):
+                right = re.sub(pattern, replacement, gold, count=1, flags=re.S)
+                assert right != gold, (name, pattern)
+                assert env.grade(connections, right, gold) == (True, "matches on all databases"), (question, right)
+
+
+def test_clock_reads_rejected(cons):
+    for sql in ["SELECT COUNT(*) FROM orders WHERE order_date < date('now')",
+                "SELECT strftime('%s', 'NOW') FROM orders", "SELECT datetime(order_date, 'localtime') FROM orders"]:
+        rows, err = env.execute(cons[0], sql, deterministic=True)
+        assert rows is None and 'current time' in err
+    with pytest.raises(ValueError, match='Reference query failed'):
+        env.grade(cons, 'SELECT 1 FROM orders', "SELECT date('now') FROM orders LIMIT 1")
+
+
+def test_builtin_references_do_not_depend_on_tie_order():
+    con = env.connect(env.DB_PATH)
+    assert env.tie_dependent(con, 'SELECT name FROM products ORDER BY category LIMIT 2')
+    assert not env.tie_dependent(con, 'SELECT name FROM products ORDER BY price DESC, id LIMIT 2')
+    for db in (env.DB_PATH, env.EVAL_DB_PATH):
+        with ExitStack() as stack:
+            for c in [stack.enter_context(closing(c)) for c in env.verifier_connections(db)]:
+                for name in env.BUILTIN:
+                    for question, gold in questions(name):
+                        assert not env.tie_dependent(c, gold), question
+
+
+def test_builtin_answers_differ_between_fixtures():
+    """Equal answers on every fixture would let a value copied from exploration pass."""
+    from evolve import signature
+    for db in (env.DB_PATH, env.EVAL_DB_PATH):
+        with ExitStack() as stack:
+            connections = [stack.enter_context(closing(c)) for c in env.verifier_connections(db)]
+            for name in env.BUILTIN:
+                for question, gold in questions(name):
+                    assert len({signature(env.execute(c, gold)[0]) for c in connections}) > 1, question
+
+
+def test_heldout_templates_are_never_trained():
+    tasks = env.eval_tasks(2, 1)
+    splits = {t.template: t.split for t in tasks}
+    assert {n for n, s in splits.items() if s == 'heldout_template'} == set(env.HELDOUT_TEMPLATES)
+    assert {n for n, s in splits.items() if s == 'shared_wording'} == {'avg_price_by_cat', 'never_ordered'}
+    trained = env.sample_tasks(2000, 3)
+    assert not {t.template for t in trained} & set(env.HELDOUT_TEMPLATES)

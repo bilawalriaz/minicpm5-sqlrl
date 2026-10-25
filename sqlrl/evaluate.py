@@ -20,7 +20,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default=str(Path(__file__).parent.parent / "models/MiniCPM5-1B"))
     ap.add_argument("--adapter", default=None)
-    ap.add_argument("--per-template", type=int, default=3)
+    ap.add_argument("--per-template", type=int, default=2, help="distinct questions per trained template; held-out templates get twice as many")
     ap.add_argument("--k", type=int, default=8)
     ap.add_argument("--temp", type=float, default=1.0)
     ap.add_argument("--max-turns", type=int, default=5)
@@ -60,6 +60,12 @@ def main():
     print(f"\nmean pass@1 {sum(all_p1) / len(all_p1):.3f}   mean pass@{args.k} {sum(all_pk) / len(all_pk):.3f}")
     for t in sorted(tier_scores):
         print(f"  tier {t}: pass@1 {sum(tier_scores[t]) / len(tier_scores[t]):.3f}")
+    splits = defaultdict(list)
+    for e in eps:
+        splits[e.task.split].append(e.outcome == "correct")
+    for name, xs in sorted(splits.items()):
+        print(f"  {name}: pass@1 {sum(xs) / len(xs):.3f} ({len(xs)} attempts)")
+    print(f"attempt-weighted pass@1 {sum(e.outcome == 'correct' for e in eps) / len(eps):.3f}")
     print("outcomes:", dict(Counter(e.outcome for e in eps)))
     print(f"peak MLX memory {mx.get_peak_memory() / 1024**3:.1f}GB")
     print(f"{stats['gen_tokens']} tokens in {stats['seconds']:.0f}s "
@@ -68,7 +74,7 @@ def main():
     if args.out:
         with open(args.out, "w") as f:
             for e in eps:
-                f.write(json.dumps({"template": e.task.template, "question": e.task.question,
+                f.write(json.dumps({"template": e.task.template, "question": e.task.question, "split": e.task.split,
                                     "reward": e.reward, "outcome": e.outcome,
                                     "verifier_version": env.VERIFIER_VERSION, "protocol_version": env.PROTOCOL_VERSION,
                                     "final_sql": e.final_sql, "verifier_reason": e.verifier_reason,

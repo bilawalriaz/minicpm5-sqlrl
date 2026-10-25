@@ -1,0 +1,128 @@
+{
+  "runs": [
+    "curriculum_50b"
+  ],
+  "previous_fixtures": "sql-v2.1",
+  "verifier_version": "sql-v2.2",
+  "comparison": "SQL semantics on the three original databases plus four training fixtures of each version; the submission protocol is not regraded",
+  "files": 27,
+  "counts": {
+    "recorded_accepted_sql-v2.1_accepted_sql-v2.2_accepted": 1886,
+    "recorded_rejected_sql-v2.1_rejected_sql-v2.2_rejected": 471,
+    "no_recorded_submission": 719,
+    "recorded_accepted_sql-v2.1_rejected_sql-v2.2_rejected": 348,
+    "recorded_accepted_sql-v2.1_accepted_sql-v2.2_rejected": 28,
+    "recorded_accepted_sql-v2.1_rejected_sql-v2.2_accepted": 4
+  },
+  "by_source": {
+    "student": {
+      "recorded_accepted_sql-v2.1_accepted_sql-v2.2_accepted": 1831,
+      "recorded_rejected_sql-v2.1_rejected_sql-v2.2_rejected": 471,
+      "recorded_accepted_sql-v2.1_rejected_sql-v2.2_rejected": 348,
+      "recorded_accepted_sql-v2.1_accepted_sql-v2.2_rejected": 28,
+      "recorded_accepted_sql-v2.1_rejected_sql-v2.2_accepted": 4
+    },
+    "teacher": {
+      "recorded_accepted_sql-v2.1_accepted_sql-v2.2_accepted": 55
+    }
+  },
+  "newly_rejected_by_template": {
+    "frequent_customers": 15,
+    "priciest_in_cat": 1,
+    "top_spenders": 9,
+    "categories_bought_by_both_cities": 2,
+    "best_category_year": 1
+  },
+  "examples": [
+    {
+      "file": "curriculum_50b/step_00003",
+      "template": "frequent_customers",
+      "source": "student",
+      "question": "Which customers have placed more than 12 orders? Return only their names.",
+      "sql": "SELECT DISTINCT name FROM customers WHERE id IN (SELECT customer_id FROM orders GROUP BY customer_id HAVING COUNT(*) > 12)",
+      "reference": "SELECT c.name FROM customers c JOIN orders o ON o.customer_id = c.id GROUP BY c.id HAVING COUNT(*) > 12",
+      "reason": "wrong on alternate database 4"
+    },
+    {
+      "file": "curriculum_50b/step_00007",
+      "template": "priciest_in_cat",
+      "source": "student",
+      "question": "What is the name of the most expensive product in the Books category?",
+      "sql": "SELECT p.name AS product_name FROM products p JOIN order_items oi ON oi.product_id=p.id JOIN customers c ON c.id=oi.order_id WHERE p.category='Books' ORDER BY p.price DESC LIMIT 1",
+      "reference": "SELECT name FROM products WHERE category = 'Books' ORDER BY price DESC LIMIT 1",
+      "reason": "wrong on alternate database 6"
+    },
+    {
+      "file": "curriculum_50b/step_00007",
+      "template": "frequent_customers",
+      "source": "student",
+      "question": "Which customers have placed more than 9 orders? Return only their names.",
+      "sql": "SELECT DISTINCT c.name FROM customers c JOIN orders o ON o.customer_id=c.id GROUP BY c.id HAVING COUNT(*)>9",
+      "reference": "SELECT c.name FROM customers c JOIN orders o ON o.customer_id = c.id GROUP BY c.id HAVING COUNT(*) > 9",
+      "reason": "wrong on alternate database 4"
+    },
+    {
+      "file": "curriculum_50b/step_00009",
+      "template": "top_spenders",
+      "source": "student",
+      "question": "Who are the top 5 customers by total amount spent (sum of quantity * unit_price) on orders that were not cancelled? Return only their names.",
+      "sql": "SELECT DISTINCT c.name FROM customers c JOIN orders o ON o.customer_id=c.id JOIN order_items op ON op.order_id=o.id WHERE o.status!='cancelled' GROUP BY c.id ORDER BY SUM(op.quantity*op.unit_price) DESC LIMIT 5",
+      "reference": "SELECT c.name FROM customers c JOIN orders o ON o.customer_id = c.id JOIN order_items oi ON oi.order_id = o.id WHERE o.status != 'cancelled' GROUP BY c.id ORDER BY SUM(oi.quantity * oi.unit_price) DESC LIMIT 5",
+      "reason": "wrong on alternate database 4"
+    },
+    {
+      "file": "curriculum_50b/step_00011",
+      "template": "top_spenders",
+      "source": "student",
+      "question": "Who are the top 3 customers by total amount spent (sum of quantity * unit_price) on orders that were not cancelled? Return only their names.",
+      "sql": "SELECT DISTINCT c.name FROM customers c JOIN orders o ON o.customer_id=c.id JOIN order_items oi ON oi.order_id=o.id WHERE o.status!='cancelled' GROUP BY c.id ORDER BY SUM(oi.quantity*oi.unit_price) DESC LIMIT 3",
+      "reference": "SELECT c.name FROM customers c JOIN orders o ON o.customer_id = c.id JOIN order_items oi ON oi.order_id = o.id WHERE o.status != 'cancelled' GROUP BY c.id ORDER BY SUM(oi.quantity * oi.unit_price) DESC LIMIT 3",
+      "reason": "wrong on alternate database 4"
+    },
+    {
+      "file": "curriculum_50b/step_00011",
+      "template": "frequent_customers",
+      "source": "student",
+      "question": "Which customers have placed more than 11 orders? Return only their names.",
+      "sql": "SELECT DISTINCT c.name FROM customers c JOIN orders o ON o.customer_id=c.id GROUP BY c.id HAVING COUNT(*)>11",
+      "reference": "SELECT c.name FROM customers c JOIN orders o ON o.customer_id = c.id GROUP BY c.id HAVING COUNT(*) > 11",
+      "reason": "wrong on alternate database 4"
+    },
+    {
+      "file": "curriculum_50b/step_00012",
+      "template": "top_spenders",
+      "source": "student",
+      "question": "Who are the top 5 customers by total amount spent (sum of quantity * unit_price) on orders that were not cancelled? Return only their names.",
+      "sql": "SELECT DISTINCT c.name FROM customers c JOIN orders o ON o.customer_id=c.id JOIN order_items oi ON oi.order_id=o.id WHERE o.status!='cancelled' GROUP BY c.id ORDER BY SUM(oi.quantity*oi.unit_price) DESC LIMIT 5",
+      "reference": "SELECT c.name FROM customers c JOIN orders o ON o.customer_id = c.id JOIN order_items oi ON oi.order_id = o.id WHERE o.status != 'cancelled' GROUP BY c.id ORDER BY SUM(oi.quantity * oi.unit_price) DESC LIMIT 5",
+      "reason": "wrong on alternate database 4"
+    },
+    {
+      "file": "curriculum_50b/step_00015",
+      "template": "categories_bought_by_both_cities",
+      "source": "student",
+      "question": "Which product categories were bought by customers from London AND by customers from New York? Return the category name.",
+      "sql": "SELECT DISTINCT p.category FROM order_items oi JOIN products p ON p.id=oi.product_id JOIN orders o ON o.id=oi.order_id JOIN customers c ON c.id=o.customer_id WHERE c.city IN ('London','New York')",
+      "reference": "SELECT DISTINCT p.category FROM order_items oi JOIN orders o ON oi.order_id = o.id JOIN customers c ON o.customer_id = c.id JOIN products p ON oi.product_id = p.id WHERE c.city = 'London' INTERSECT SELECT DISTINCT p.category FROM order_items oi JOIN orders o ON oi.order_id = o.id JOIN customers c ON o.customer_id = c.id JOIN products p ON oi.product_id = p.id WHERE c.city = 'New York'",
+      "reason": "wrong on alternate database 6"
+    },
+    {
+      "file": "curriculum_50b/step_00015",
+      "template": "categories_bought_by_both_cities",
+      "source": "student",
+      "question": "Which product categories were bought by customers from London AND by customers from New York? Return the category name.",
+      "sql": "SELECT DISTINCT p.category FROM order_items oi JOIN products p ON p.id=oi.product_id JOIN orders o ON o.id=oi.order_id JOIN customers c ON c.id=o.customer_id WHERE c.city IN ('London','New York')",
+      "reference": "SELECT DISTINCT p.category FROM order_items oi JOIN orders o ON oi.order_id = o.id JOIN customers c ON o.customer_id = c.id JOIN products p ON oi.product_id = p.id WHERE c.city = 'London' INTERSECT SELECT DISTINCT p.category FROM order_items oi JOIN orders o ON oi.order_id = o.id JOIN customers c ON o.customer_id = c.id JOIN products p ON oi.product_id = p.id WHERE c.city = 'New York'",
+      "reason": "wrong on alternate database 6"
+    },
+    {
+      "file": "curriculum_50b/step_00019",
+      "template": "best_category_year",
+      "source": "student",
+      "question": "Which product category had the highest revenue (sum of quantity * unit_price) from shipped orders in 2023? Return only the category.",
+      "sql": "SELECT p.category FROM order_items oi JOIN products p ON p.id=oi.product_id JOIN orders o ON o.id=oi.order_id WHERE o.order_date LIKE '2023%' GROUP BY p.category ORDER BY SUM(oi.quantity*oi.unit_price) DESC LIMIT 1",
+      "reference": "SELECT p.category FROM order_items oi JOIN orders o ON o.id = oi.order_id JOIN products p ON p.id = oi.product_id WHERE o.status = 'shipped' AND o.order_date LIKE '2023-%' GROUP BY p.category ORDER BY SUM(oi.quantity * oi.unit_price) DESC LIMIT 1",
+      "reason": "wrong on alternate database 4"
+    }
+  ]
+}
