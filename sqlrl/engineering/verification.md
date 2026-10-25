@@ -73,3 +73,22 @@ Generation batch 64 is selected. Micro-batch 8,192 remains the reference choice:
 Neither larger micro-batch improved measured throughput. The MLX cap is 26 GiB. Learning rate
 3e-5, rank 32, scale 2, temperature 1, 16 prompts, and group size 8 are retained;
 this work does not establish an optimal learning rate from a hyperparameter sweep.
+
+## Final integration run
+
+verifier_v21_check completed two steps on the final sql-v2.1 verifier and
+submit-sql-v2 protocol. It warm-started verifier_v2_smoke/final with a fresh
+optimizer, generation batch 64, micro-batch 8,192, 26 GiB cap, four prompts and
+eight samples per prompt. Evaluation used 22 distinct questions with two attempts
+each: 39/44 before training, 34/44 after step 1, and 39/44 after step 2.
+Step 1 had 32/32 correct and no nonzero-advantage groups, so no gradient update
+occurred. Step 2 had 28/32 correct, 3/4 signal groups, gradient norm 0.211, and
+5.70 GiB peak MLX memory. Step checkpoints and final adapters were saved.
+The first run exercised actual teacher injection; this final run needed no rescue.
+The stochastic evaluations are pipeline checks, not a learning-rate comparison.
+Final-smoke.json stores configuration, metrics, and evaluation evidence.
+
+The dashboard was rebuilt, its server restarted, and the run page returned HTTP
+200. No overnight training has been started. The private GitHub repository contains
+source, tests and these records; credentials, weights, databases and raw runs stay
+local.

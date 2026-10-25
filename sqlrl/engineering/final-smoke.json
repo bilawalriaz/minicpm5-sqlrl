@@ -1,0 +1,230 @@
+{
+  "run": "verifier_v21_check",
+  "verifier_version": "sql-v2.1",
+  "protocol_version": "submit-sql-v2",
+  "warm_start": "runs/verifier_v2_smoke/final",
+  "optimizer_restored": false,
+  "status": {
+    "updated": 1792900454.887478,
+    "phase": "done",
+    "step": 2
+  },
+  "config": {
+    "name": "verifier_v21_check",
+    "steps": 2,
+    "prompts": 4,
+    "group": 8,
+    "tiers": "1,2,3",
+    "curriculum": true,
+    "evolve_every": 0,
+    "evolve_skills": 2,
+    "evolve_n": 2,
+    "evolve_model": "glm-5.3-flash",
+    "evolve_min_seen": 16,
+    "lr": 3e-05,
+    "rank": 32,
+    "scale": 2.0,
+    "lora_layers": 24,
+    "temp": 1.0,
+    "max_turns": 5,
+    "max_tokens": 256,
+    "hide_schema": false,
+    "micro_tokens": 8192,
+    "gen_batch": 64,
+    "mem_gb": 26,
+    "max_grad_norm": 1.0,
+    "eval_every": 1,
+    "eval_per_template": 2,
+    "eval_k": 2,
+    "save_every": 1,
+    "seed": 0,
+    "no_answer_reward": -0.2,
+    "prose_penalty": 0.003,
+    "teacher": "glm-5.3-flash",
+    "teacher_effort": "low",
+    "teacher_wait": 60,
+    "started": 1792900403.563512,
+    "verifier_version": "sql-v2.1",
+    "protocol_version": "submit-sql-v2",
+    "optimizer_restored": false
+  },
+  "metrics": [
+    {
+      "step": 1,
+      "time": 1792900415.8004391,
+      "reward_mean": 1.0,
+      "outcomes": {
+        "correct": 32
+      },
+      "by_tier": {
+        "1": 1.0,
+        "2": 1.0,
+        "3": 1.0
+      },
+      "turns_mean": 1.03125,
+      "literal_frac": 0.0,
+      "literal_correct_frac": 0.0,
+      "gen_tokens_mean": 46.125,
+      "prose_tokens_mean": 0.0,
+      "groups_kept": 0,
+      "groups_total": 4,
+      "loss": 0.0,
+      "grad_norm": 0.0,
+      "train_tokens": 0,
+      "rollout_s": 5.049386978149414,
+      "train_s": 0.0,
+      "gen_tps": 308.18885884114223,
+      "peak_mem_gb": 3.689211272634566,
+      "new_templates": [],
+      "evolve_spent": 0.0,
+      "teacher_dead_groups": 0,
+      "teacher_rescued": 0,
+      "teacher_spent": 0.00044969000000000004
+    },
+    {
+      "step": 2,
+      "time": 1792900448.9784992,
+      "reward_mean": 0.875,
+      "outcomes": {
+        "correct": 28,
+        "wrong": 4
+      },
+      "by_tier": {
+        "2": 0.75,
+        "3": 0.9166666666666666
+      },
+      "turns_mean": 1.0,
+      "literal_frac": 0.0,
+      "literal_correct_frac": 0.0,
+      "gen_tokens_mean": 66.8125,
+      "prose_tokens_mean": 0.0,
+      "groups_kept": 3,
+      "groups_total": 4,
+      "loss": -0.004781929399601366,
+      "grad_norm": 0.21082527935504913,
+      "train_tokens": 1890,
+      "rollout_s": 5.245296001434326,
+      "train_s": 20.60141396522522,
+      "gen_tps": 427.1042324861807,
+      "peak_mem_gb": 5.698544146493077,
+      "new_templates": [],
+      "evolve_spent": 0.0,
+      "teacher_dead_groups": 0,
+      "teacher_rescued": 0,
+      "teacher_spent": 0.00114251
+    }
+  ],
+  "evals": [
+    {
+      "step": 0,
+      "time": 1792900410.748526,
+      "pass1": 0.8863636363636364,
+      "verifier_version": "sql-v2.1",
+      "protocol_version": "submit-sql-v2",
+      "questions": 22,
+      "attempts": 44,
+      "evaluation_split": "reserved parameters and unseen databases; constant templates share wording",
+      "by_template": {
+        "count_city": 1.0,
+        "count_status": 1.0,
+        "cheap_products": 0.75,
+        "priciest_in_cat": 1.0,
+        "signups_year": 1.0,
+        "orders_by_country": 1.0,
+        "revenue_month": 0.75,
+        "avg_price_by_cat": 1.0,
+        "distinct_buyers_cat": 1.0,
+        "units_of_product": 0.5,
+        "frequent_customers": 1.0,
+        "never_ordered": 1.0,
+        "top_spenders": 1.0,
+        "best_category_year": 1.0,
+        "churned": 0.5
+      },
+      "by_tier": {
+        "1": 0.9444444444444444,
+        "2": 0.8125,
+        "3": 0.9
+      },
+      "outcomes": {
+        "correct": 39,
+        "wrong": 5
+      },
+      "seconds": 5.882881164550781
+    },
+    {
+      "step": 1,
+      "time": 1792900423.129888,
+      "pass1": 0.7727272727272727,
+      "verifier_version": "sql-v2.1",
+      "protocol_version": "submit-sql-v2",
+      "questions": 22,
+      "attempts": 44,
+      "evaluation_split": "reserved parameters and unseen databases; constant templates share wording",
+      "by_template": {
+        "count_city": 1.0,
+        "count_status": 1.0,
+        "cheap_products": 0.75,
+        "priciest_in_cat": 1.0,
+        "signups_year": 1.0,
+        "orders_by_country": 1.0,
+        "revenue_month": 0.5,
+        "avg_price_by_cat": 0.5,
+        "distinct_buyers_cat": 1.0,
+        "units_of_product": 0.25,
+        "frequent_customers": 1.0,
+        "never_ordered": 1.0,
+        "top_spenders": 1.0,
+        "best_category_year": 0.5,
+        "churned": 0.0
+      },
+      "by_tier": {
+        "1": 0.9444444444444444,
+        "2": 0.625,
+        "3": 0.7
+      },
+      "outcomes": {
+        "correct": 34,
+        "wrong": 10
+      },
+      "seconds": 7.051050186157227
+    },
+    {
+      "step": 2,
+      "time": 1792900454.841922,
+      "pass1": 0.8863636363636364,
+      "verifier_version": "sql-v2.1",
+      "protocol_version": "submit-sql-v2",
+      "questions": 22,
+      "attempts": 44,
+      "evaluation_split": "reserved parameters and unseen databases; constant templates share wording",
+      "by_template": {
+        "count_city": 1.0,
+        "count_status": 1.0,
+        "cheap_products": 0.5,
+        "priciest_in_cat": 1.0,
+        "signups_year": 1.0,
+        "orders_by_country": 1.0,
+        "revenue_month": 1.0,
+        "avg_price_by_cat": 1.0,
+        "distinct_buyers_cat": 1.0,
+        "units_of_product": 0.75,
+        "frequent_customers": 1.0,
+        "never_ordered": 1.0,
+        "top_spenders": 0.5,
+        "best_category_year": 1.0,
+        "churned": 0.5
+      },
+      "by_tier": {
+        "1": 0.8888888888888888,
+        "2": 0.9375,
+        "3": 0.8
+      },
+      "outcomes": {
+        "correct": 39,
+        "wrong": 5
+      },
+      "seconds": 5.599692106246948
+    }
+  ]
+}
