@@ -12,7 +12,8 @@ import random
 from collections import defaultdict
 from pathlib import Path
 
-SPLITS = {"heldout_check": "Never-trained templates (check set)",
+SPLITS = {"heldout_test": "Never-trained templates (test set)",
+          "heldout_check": "Never-trained templates (check set)",
           "heldout_select": "Never-trained templates (selection set)",
           "reserved_params": "Trained templates, unseen parameters and data",
           "shared_wording": "Trained wording, unseen data"}

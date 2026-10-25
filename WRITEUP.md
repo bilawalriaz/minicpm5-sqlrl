@@ -2,7 +2,7 @@
 
 I've been training MiniCPM5-1B to answer questions about a SQLite database by writing and running SQL. Everything runs locally on an M3 Pro with 36 GB of memory, using MLX, LoRA adapters and group-relative policy optimisation (GRPO). A small API model helps generate training questions and check them.
 
-This is a write-up of where it's got to. The short version: on question types it never trained on, the released 1B model goes from 13% to roughly 55-59% correct. On the question types it did train on, it goes from under 15% to 94-100%, measured on databases it has never seen.
+The short version: on a test set of question types it never trained on, written after every design decision and scored once, the released 1B model goes from 3.6% to 44.7% correct. On the question types it did train on, it goes from 15% to 95%, measured on databases it has never seen.
 
 ## The task
 
@@ -39,18 +39,21 @@ So the evaluation now uses separate databases and three kinds of question:
 
 A separate ten-template test set was added after all the design decisions. It gets scored exactly once, on the released model and the final checkpoint, with the exclusion rule written down before any result existed.
 
-## Results so far
+## Results
 
-All figures compare against the released `openbmb/MiniCPM5-1B` (bf16), not an earlier base checkpoint.
+All figures compare against the released `openbmb/MiniCPM5-1B` (bf16), not an earlier base checkpoint. Each question was attempted 16 times at temperature 1 with up to 384 tokens per turn. The brackets are 95% intervals from resampling questions.
 
 | | Released 1B | Fine-tuned 1B |
 | --- | --- | --- |
-| Never-trained types, check set | 13% | 54-59% across the latest checkpoints |
-| Never-trained types, selection set | 5% | 45% |
-| Trained types, unseen data | 6% | 94-100% |
-| All evaluation questions | 7% | about 61% |
+| Test set: 9 never-trained types, 33 questions | 3.6% (1-7%) | 44.7% (34-56%) |
+| Check set: 5 never-trained types, 18 questions | 12.2% (2-23%) | 70.1% (56-83%) |
+| Selection set: 5 never-trained types, 19 questions | 5.6% (2-11%) | 50.0% (32-69%) |
+| Trained types, unseen parameters and data | 14.8% (5-28%) | 94.9% (91-98%) |
+| All attempts | 8.0% | 58.8% |
 
-The check set is small (18 questions from five templates), so treat the exact percentage loosely. The test-set numbers, with confidence intervals, will replace these once training finishes.
+One test template was excluded under the rule written before scoring, because a generated training template asks almost the same thing. Per-template results are in `sqlrl/engineering/release-1b-report.md`.
+
+The released model mostly fails on protocol: 640 of its 1,472 attempts never submit SQL, and another 507 run out of turns. The fine-tuned model submits on almost every attempt, so its remaining errors are wrong SQL. The hardest held-out types are still hard: counting groups that pass a `HAVING` filter, returned-order ratios and month-of-year aggregation sit between 0% and 19%. Some others went from 0% to around 90%.
 
 ## What stopped it improving, and the fixes
 
@@ -68,20 +71,24 @@ Teacher examples from too far away caused damage. Injecting an API model's solut
 
 The policy swung between styles. With 16 questions per step from a varied pool, a few templates could dominate an update, and held-out scores moved 15-20 points within four steps. Evaluating and saving an exponential moving average of the weights, together with a lower learning rate and a larger batch, smoothed that out.
 
-With all of that in place, a 20-step validation run moved the check set from 40% to 59% with no loss on the trained types. That's the configuration the current long run uses.
+With all of that in place, a 20-step validation run moved the check set from 40% to 59% with no loss on the trained types. A longer run with twice the batch size then plateaued at about 45% on the selection set after 30 steps.
+
+## Distillation beat more RL
+
+RL only learns from questions the model sometimes gets right, so question types it can't solve yet give it nothing. To get past the plateau, GLM-5.3-flash wrote solutions for every training type, four parameter choices each. Every solution was checked against all four databases, leaving 787 verified solutions across 212 types. They cost $0.12.
+
+The model then trained on those solutions directly, mixed with 567 of its own correct answers so it wouldn't forget what it already knew. That's 86 updates at a low learning rate. The selection set went from 46% to 51% and the check set from 65% to 72%, with trained types unchanged at 97%. That checkpoint is the final 1B model.
 
 ## Generating training data
 
-The question bank has grown from 15 hand-written templates to over 160 accepted generated ones. Claude Haiku 5.5 and GLM-5.3 propose templates, and a different model has to solve them without seeing the reference answer. In the latest generation round, Haiku also reviews each template for ambiguity. A template is rejected if its answer is the same on every database, if it depends on tie order, if a filter in it never changes the answer, or if its answers overlap a held-out question.
+The question bank has grown from 15 hand-written templates to 202 accepted generated ones. Claude Haiku 5.5 and GLM-5.3 propose templates, and a different model has to solve them without seeing the reference answer. In the latest generation round, Haiku also reviews each template for ambiguity. A template is rejected if its answer is the same on every database, if it depends on tie order, if a filter in it never changes the answer, or if its answers overlap a held-out question.
 
 When the model keeps failing a template, the generator writes simpler stepping-stone templates that teach its parts. At 1B parameters, the model learns best from small steps it can almost manage.
 
-Total API spend so far is under $1. All training and evaluation runs locally.
+Total API spend is about $2, most of it on template generation with review. All training and evaluation runs locally.
 
 ## What's next
 
-The current run continues until the selection score stops improving. After that I'll try supervised distillation on verified solutions across the whole bank before another round of RL, which should teach new question types faster than RL can bootstrap them.
-
-Then the same pipeline goes onto the released MiniCPM5-2B, so I can compare how much each model gains from its own starting point and how the two finished models compare.
+The released MiniCPM5-2B is going through the same pipeline now: distillation from a fresh adapter, up to six hours of RL with early stopping, a second distillation pass, then one scoring of the test set. That will show how much each model gains from its own starting point and how the two finished models compare.
 
 Code, tests and the engineering records are in this repository. Model weights, databases and checkpoints stay local. The detailed evidence for every number above is in `sqlrl/engineering/verification.md`.
