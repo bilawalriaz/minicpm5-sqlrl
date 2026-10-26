@@ -115,7 +115,7 @@ The stages, from the in-run evaluations (8 attempts per held-out question):
 | --- | --- | --- | --- | --- | --- | --- |
 | Released | 8.6% | 11.8% | 18.8% | 52.0% | 75.0% | 64.1% |
 | After distillation | 42.1% | 55.6% | 73.4% | 66.4% | 92.4% | 95.3% |
-| After GRPO | 58.6% | 72.2% | 98.4% | 75.0% | 95-98% | 96.9% |
+| After GRPO | 58.6% | 72.2% | 98.4% | 75.0% | 95.1% | 96.9% |
 | After the second distillation | 59.2% | 76.4% | 90.6% | 75.7% | 96.5% | 95.3% |
 
 Distillation did the most for both models. For the 1B it also taught the tool protocol: one pass took the selection set from 9% to 42%. RL mattered more for the 1B than for the 2B. The 1B is faster, so six hours covered 78 steps against 23, and it still failed often enough for most groups to carry signal; RL added 16 points on its selection set and 9 on the 2B's. The second distillation pass added a little on the never-trained sets for both, and the pipeline kept it in both runs. It cost the 1B some accuracy on trained types in the in-run evaluation (98% to 91%); the final scoring has them at 94%.
