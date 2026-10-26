@@ -392,7 +392,32 @@ and the unchanged shop prompt.
 
 Runs (k 4, temperature 1, 5 turns, 384 tokens per turn), queued after the 2B pipeline:
 `runs/spider_1b_released`, `runs/spider_2b_released`, `runs/spider_1b_sql`
-(`release/MiniCPM5-1B-SQL`). Results: pending.
+(`release/MiniCPM5-1B-SQL`), 26 October 2026. 1,032 questions, 4,128 attempts each.
+Intervals resample questions.
+
+| | Released 1B | Released 2B | Fine-tuned 1B |
+| --- | --- | --- | --- |
+| Test-suite pass@1 | 6.6% (5.6-7.7%) | 41.6% (39.2-44.2%) | 25.9% (23.7-28.1%) |
+| Strict pass@1 | 6.5% (5.5-7.5%) | 38.7% (36.2-41.1%) | 25.3% (23.1-27.5%) |
+| Test-suite pass@4 | 17.2% | 58.8% | 40.7% |
+| Correct / wrong | 267 / 316 | 1,596 / 1,586 | 1,043 / 3,026 |
+| No query / max turns / length | 1,992 / 1,161 / 392 | 322 / 621 / 3 | 0 / 50 / 9 |
+| Mean turns | 3.54 | 2.72 | 1.97 |
+| Wrong submissions that are SQL errors | 142 | 67 | 2,096 |
+
+Shop training transfers: the fine-tuned 1B is ahead of the released 1B on every
+Spider database. It is below the released 2B on 18 of 20, level on
+`real_estate_properties` (4 questions) and ahead on `network_1` (0.46 vs 0.43).
+
+The fine-tuned 1B submits on almost every attempt, as on the shop, but 2,096 of its
+3,026 wrong submissions fail to execute: 1,350 "no such column", 393 syntax errors,
+207 "no such table". In 1,312 of the 2,096 its last `run_sql` returned an error and it
+submitted a different query without testing it; in 370 it submitted the exact query
+that had just failed; in 332 it ran nothing before submitting. The released 2B has 67
+such errors. Typical case (`concert_singer`): it joins `concert` on a `Singer_ID`
+column that table does not have, reads the error, and submits the same join. Likely
+cause (not measured): the shop curriculum rarely produces an execution error, so
+recovery from one was never trained.
 
 ## Real-question seeds for template generation
 
