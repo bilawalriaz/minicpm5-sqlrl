@@ -452,3 +452,25 @@ collection ran beside training (rollout 1,742 s at 28 tokens/s against 299 s at 
 tokens/s once they finished). Swap counters showed about 184 GB written since boot,
 from overlapping jobs and a 7.5 GB `asitop` process earlier in the day; none during the
 measured quiet period.
+
+## MiniCPM5-1B through the same pipeline (p1b)
+
+`FIRST_SOLUTIONS=data/sql-v2.2/solutions_v2.before_seeds.jsonl TEMPLATES_BEFORE=1792963417
+scripts/pipeline.sh ../models/MiniCPM5-1B p1b 6`, 26 October 2026, 12:44 to 21:09. The first
+distillation used the same 787 solutions as p2b's, the RL stage started from the same 202
+generated templates, and the second distillation read the same 884 solutions; budget and
+seed matched.
+
+| Stage | Run | Selection | Check | Reserved |
+| --- | --- | --- | --- | --- |
+| Released | p1b_sft (before) | 0.086 | 0.118 | 0.188 |
+| Distillation, fresh adapter, 24 layers, 787 solutions, 50 updates | p1b_sft | 0.421 | 0.556 | 0.734 |
+| GRPO, 78 steps in 6 h (time limit), selected step 78 | p1b_rl | 0.586 | 0.722 | 0.984 |
+| Distillation, 884 solutions + 884 replayed answers, 111 updates | p1b_sft2 | 0.592 | 0.764 | 0.906 |
+
+Final scoring (`release-1b-pipeline-report.md`, same settings and exclusion as p2b): test
+0.030 -> 0.479 (0.36-0.59), check 0.101 -> 0.740, selection 0.089 -> 0.582, reserved
+parameters 0.125 -> 0.941, attempt-weighted 0.074 -> 0.622. Outcomes: 915 correct, 527
+wrong, 30 out of turns. The released 1B scored 0.036 on the test set in the earlier
+scoring and 0.030 here (sampling). The pipeline 1B is ahead of the development-run 1B
+(sft_1b_v1) on every held-out split; it replaces it as the reported fine-tuned 1B.

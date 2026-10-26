@@ -2,7 +2,7 @@
 
 I've been training MiniCPM5-1B, and then MiniCPM5-2B, to answer questions about a SQLite database by writing and running SQL. Everything runs locally on an M3 Pro with 36 GB of memory, using MLX, LoRA adapters and group-relative policy optimisation (GRPO). A small API model helps generate training questions and check them.
 
-The short version: on a test set of question types neither model trained on, written after every design decision and scored once, the 1B goes from 3.6% to 44.7% correct and the 2B from 38.3% to 73.1%. On the question types they did train on, measured on databases they had never seen, the 1B goes from 15% to 95% and the 2B from 70% to 99%.
+The short version: both models went through the same pipeline with the same data and time budget. On a test set of question types neither model trained on, written after every design decision and scored once, the 1B goes from 3.0% to 47.9% correct and the 2B from 38.3% to 73.1%. On the question types they did train on, measured on databases they had never seen, the 1B goes from 13% to 94% and the 2B from 70% to 99%.
 
 ## The task
 
@@ -39,7 +39,9 @@ So the evaluation now uses separate databases and three kinds of question:
 
 A separate ten-template test set was added after all the design decisions. It gets scored exactly once, on the released model and the final checkpoint, with the exclusion rule written down before any result existed.
 
-## Results
+## Development-run results
+
+These are the 1B results from the development runs, where the method was worked out. The same steps later became one script, and running the 1B through it did better on every never-trained split (see "Both models through the same pipeline" below).
 
 All figures compare against the released `openbmb/MiniCPM5-1B` (bf16), not an earlier base checkpoint. Each question was attempted 16 times at temperature 1 with up to 384 tokens per turn. The brackets are 95% intervals from resampling questions.
 
@@ -93,33 +95,33 @@ Total API spend is about $2, most of it on template generation with review. All 
 
 `docs/lmstudio.md` explains how to test it in LM Studio, with a system prompt and ten example questions with their measured success rates. The model writes its own tool calls in the MiniCPM format, so you run each query against the evaluation database and paste the result back.
 
-## MiniCPM5-2B
+## Both models through the same pipeline
 
-The released 2B went through `sqlrl/scripts/pipeline.sh` unattended: score the released model, distil from a fresh LoRA adapter on all 42 layers, up to six hours of GRPO with early stopping, a second distillation pass, then one scoring of the test set. The whole run took just under 11 hours.
+`sqlrl/scripts/pipeline.sh` runs the same stages on any model: score the released model, distil from a fresh LoRA adapter on all layers, up to six hours of GRPO with early stopping, a second distillation pass, then one scoring of the test set. Both models used the same 787 solutions for the first distillation, the same 202 generated templates when RL started, the same 884 solutions for the second distillation, the same seed and the same six-hour RL budget. The 2B run took just under 11 hours and the 1B run eight and a half.
 
 | | Released 1B | Fine-tuned 1B | Released 2B | Fine-tuned 2B |
 | --- | --- | --- | --- | --- |
-| Test set: 9 never-trained types, 33 questions | 3.6% (1-7%) | 44.7% (34-56%) | 38.3% (26-51%) | 73.1% (62-84%) |
-| Check set: 5 never-trained types | 12.2% | 70.1% | 73.6% | 96.2% (91-100%) |
-| Selection set: 5 never-trained types | 5.6% | 50.0% | 47.4% | 76.0% (62-89%) |
-| Trained types, unseen parameters and data | 14.8% | 94.9% | 69.5% | 98.8% (98-100%) |
-| All attempts | 8.0% | 58.8% | 52.5% | 83.1% |
+| Test set: 9 never-trained types, 33 questions | 3.0% (1-6%) | 47.9% (36-59%) | 38.3% (26-51%) | 73.1% (62-84%) |
+| Check set: 5 never-trained types | 10.1% | 74.0% (60-85%) | 73.6% | 96.2% (91-100%) |
+| Selection set: 5 never-trained types | 8.9% | 58.2% (41-76%) | 47.4% | 76.0% (62-89%) |
+| Trained types, unseen parameters and data | 12.5% | 94.1% (88-100%) | 69.5% | 98.8% (98-100%) |
+| All attempts | 7.4% | 62.2% | 52.5% | 83.1% |
 
-The 1B gained more points (41 against 35 on the test set) because it started near zero. The 2B removed more of its errors: 56% of its test-set misses against 43% for the 1B.
+The 1B gained more points on the test set (45 against 35) because it started near zero. The 2B removed more of its errors: 56% of its test-set misses against 46% for the 1B. The fine-tuned 1B passes the released 2B on every split except the check set, where the two are level.
 
-Each stage helped the 2B. Scores here are from the in-run evaluations (8 attempts per held-out question):
+The stages, from the in-run evaluations (8 attempts per held-out question):
 
-| Stage | Selection set | Check set | Trained types |
-| --- | --- | --- | --- |
-| Released 2B | 52.0% | 75.0% | 64.1% |
-| After distillation (787 solutions, 50 updates) | 66.4% | 92.4% | 95.3% |
-| After 23 steps of GRPO (six hours) | 75.0% | 95-98% | 96.9% |
-| After the second distillation | 75.7% | 96.5% | 95.3% |
+| Stage | 1B selection | 1B check | 1B trained | 2B selection | 2B check | 2B trained |
+| --- | --- | --- | --- | --- | --- | --- |
+| Released | 8.6% | 11.8% | 18.8% | 52.0% | 75.0% | 64.1% |
+| After distillation | 42.1% | 55.6% | 73.4% | 66.4% | 92.4% | 95.3% |
+| After GRPO | 58.6% | 72.2% | 98.4% | 75.0% | 95-98% | 96.9% |
+| After the second distillation | 59.2% | 76.4% | 90.6% | 75.7% | 96.5% | 95.3% |
 
-Distillation did most of the work. The 2B already follows the tool protocol, so the teacher solutions only had to teach SQL patterns, and they lifted every split in about an hour and a half. RL then added nine points on the selection set. The second distillation pass was level with RL, and the pipeline kept it because its selection score was higher by one attempt.
+Distillation did the most for both models. For the 1B it also taught the tool protocol: one pass took the selection set from 9% to 42%. RL mattered more for the 1B than for the 2B. The 1B is faster, so six hours covered 78 steps against 23, and it still failed often enough for most groups to carry signal; RL added 16 points on its selection set and 9 on the 2B's. The second distillation pass added a little for both, and the pipeline kept it in both runs.
 
-On the final scoring, 1,223 of the fine-tuned 2B's 1,472 attempts were correct, 212 were wrong SQL and 37 ran out of turns; none ended without a submission. The hardest types are still hard: the share of returned orders in a category (5%), the busiest month of a year (27%) and lines per order by status (27%). Counting groups that pass a `HAVING` filter, where the fine-tuned 1B managed 10-19%, reached 69-77% on the 2B.
+On the final scoring, 915 of the 1B's 1,472 attempts were correct and 1,223 of the 2B's; neither model ended an attempt without submitting. The same types are hardest for both: the busiest month of a year (1B 0%, 2B 27%), the share of returned orders (0% and 5%) and lines per order by status (2% and 27%). Counting groups that pass a `HAVING` filter separates them most: the 1B reaches 21-35% and the 2B 69-77%.
 
-Two differences between the runs matter when comparing them. The 1B's final checkpoint came from the development runs, with far more RL than the 2B's six hours. And the 2B's second distillation included 97 solutions for templates generated from real Spider train questions, added after the 1B was finished. Running the 1B through the same pipeline would make the comparison exact.
+The pipeline 1B also beat the development-run 1B on every never-trained split (test 47.9% against 44.7%, selection 58.2% against 50.0%), with less training. Per-template results are in `sqlrl/engineering/release-1b-pipeline-report.md` and `release-2b-report.md`.
 
 Code, tests and the engineering records are in this repository. Model weights, databases and checkpoints stay local. The detailed evidence for every number above is in `sqlrl/engineering/verification.md`.
