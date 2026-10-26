@@ -118,7 +118,7 @@ The stages, from the in-run evaluations (8 attempts per held-out question):
 | After GRPO | 58.6% | 72.2% | 98.4% | 75.0% | 95-98% | 96.9% |
 | After the second distillation | 59.2% | 76.4% | 90.6% | 75.7% | 96.5% | 95.3% |
 
-Distillation did the most for both models. For the 1B it also taught the tool protocol: one pass took the selection set from 9% to 42%. RL mattered more for the 1B than for the 2B. The 1B is faster, so six hours covered 78 steps against 23, and it still failed often enough for most groups to carry signal; RL added 16 points on its selection set and 9 on the 2B's. The second distillation pass added a little for both, and the pipeline kept it in both runs.
+Distillation did the most for both models. For the 1B it also taught the tool protocol: one pass took the selection set from 9% to 42%. RL mattered more for the 1B than for the 2B. The 1B is faster, so six hours covered 78 steps against 23, and it still failed often enough for most groups to carry signal; RL added 16 points on its selection set and 9 on the 2B's. The second distillation pass added a little on the never-trained sets for both, and the pipeline kept it in both runs. It cost the 1B some accuracy on trained types in the in-run evaluation (98% to 91%); the final scoring has them at 94%.
 
 On the final scoring, 915 of the 1B's 1,472 attempts were correct and 1,223 of the 2B's; neither model ended an attempt without submitting. The same types are hardest for both: the busiest month of a year (1B 0%, 2B 27%), the share of returned orders (0% and 5%) and lines per order by status (2% and 27%). Counting groups that pass a `HAVING` filter separates them most: the 1B reaches 21-35% and the 2B 69-77%.
 
