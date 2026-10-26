@@ -139,6 +139,10 @@ The 1B's weak point is recovering from errors on an unfamiliar schema. 1,491 of 
 
 The shop training data includes templates modelled on Spider train questions and rewritten for the shop schema. Spider dev questions and schemas were never used for training. Per-database results are in `sqlrl/engineering/spider-dev-report.md`.
 
+## Next: continuing from the weaknesses
+
+The pipeline ends with a scoring, and that scoring says what to train next. The plan in `sqlrl/engineering/continuation-plan.md` targets the two clearest weaknesses: queries that fail on unfamiliar schemas, using Spider's train databases (none of them is a dev schema), and the shop types both models still miss, using new generated templates. Both models continue from their final checkpoints, and every shop split and Spider dev are scored again to show what improved and what regressed.
+
 ## Running the models locally
 
 `sqlrl/scripts/export_gguf.sh` fuses a final adapter into its model and writes BF16, Q8_0 and Q4_K_M GGUF files: 1.15 GB and 0.69 GB for the 1B, 2.68 GB and 1.56 GB for the 2B. It sets no-think mode as the chat template default, because that is how the models were trained. At temperature 0 in llama.cpp, the 1B at Q8_0 gets 8 of the ten example prompts right and at Q4_K_M 6, so Q8_0 is the one to use.
