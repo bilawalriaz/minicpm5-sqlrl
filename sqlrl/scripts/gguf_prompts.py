@@ -2,8 +2,9 @@
 # Runs the LM Studio example prompts against a llama-server at temperature 0, executing run_sql
 # on eval.db and stopping at submit_sql. Prints whether the submitted result matches the expected answer.
 import json, re, sqlite3, sys, urllib.request
+from pathlib import Path
 port, label = sys.argv[1], sys.argv[2]
-root = '/Users/bilawalriaz/minicpm5-sqlrl'
+root = Path(__file__).resolve().parents[2]
 system = open(f'{root}/docs/lmstudio-system-prompt.txt').read()
 text = open(f'{root}/docs/lmstudio-prompts.txt').read()
 items = re.findall(r'^\d+\.\s*(.+?)\n\s+Expected:\s*(.+?)\s{2}\(', text, re.M)

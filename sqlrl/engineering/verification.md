@@ -497,3 +497,30 @@ runs out of tokens.
 The failures on 6 and 7 match their evaluation rates (50% and 0%). The prompt file's rates are
 now per-question rates from the final evaluations; question 2 changed from Berlin, which was not
 evaluated, to Osaka, which was.
+
+## Spider dev for both pipeline models
+
+`spider_eval.py --name spider_1b_pipeline --adapter runs/p1b_sft2/final` and
+`--name spider_2b_pipeline --model ../models/MiniCPM5-2B --adapter runs/p2b_sft2/final`,
+26 October 2026, same settings as the runs above (k 4, temperature 1, 5 turns, 384 tokens).
+Per-database results are in `spider-dev-report.md`.
+
+| | Released 1B | Pipeline 1B | Released 2B | Pipeline 2B |
+| --- | --- | --- | --- | --- |
+| Test-suite pass@1 | 6.6% (5.6-7.7%) | 29.2% (26.9-31.5%) | 41.6% (39.2-44.2%) | 54.1% (51.5-56.7%) |
+| Strict pass@1 | 6.5% | 28.3% (26.0-30.7%) | 38.7% | 50.5% (47.8-53.1%) |
+| Test-suite pass@4 | 17.2% | 44.4% | 58.8% | 68.8% |
+| Correct / wrong | 267 / 316 | 1,170 / 2,717 | 1,596 / 1,586 | 2,083 / 1,770 |
+| No query / max turns / length | 1,992 / 1,161 / 392 | 1 / 234 / 6 | 322 / 621 / 3 | 9 / 266 / 0 |
+| Mean turns | 3.54 | 2.10 | 2.72 | 2.26 |
+| Wrong submissions that are SQL errors | 142 | 1,491 | 67 | 146 |
+
+Both fine-tuned models score higher than their released versions on all 20 databases.
+The pipeline 1B is above the released 2B on `network_1` (45% vs 43%), level on
+`real_estate_properties` (4 questions) and below it on the other 18. The pipeline 1B
+is ahead of the development-run 1B (25.9%) and has fewer failed-to-execute submissions
+(1,491 against 2,096), but those are still 55% of its wrong answers; for the 2B they
+are 8%. Of the 1B's 1,491: 947 "no such column", 261 syntax errors, 137 "no such table";
+in 864 the last `run_sql` returned an error before the submission (270 resubmitted the
+same query, 594 a different untested one), and in 509 nothing was run before submitting.
+For the 2B: 14, 1 and 42 of 146.

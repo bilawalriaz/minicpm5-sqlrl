@@ -55,10 +55,11 @@ outranked unanswered attempts and was reinforced.
 The teacher uses the same tools, schema visibility, and turn budget. Verified
 teacher actions are converted to the student's token format. Actions longer than
 the student's token limit are excluded. Teacher injection supplies a supervised
-positive gradient; it is not an on-policy sample from the student. It helped the
-base model learn the protocol, but with a large bank of hard templates it degraded
-skills the model already had, so later runs leave `--teacher` off (see
-`engineering/verification.md`).
+positive gradient; it is not an on-policy sample from the student. Unfiltered, it
+taught the 1B to add extra joins to simple questions. A teacher action is now used
+only when the student's mean per-token negative log-likelihood of it is at most
+`--teacher-max-nll` (default 1.0), and its advantage is scaled by `--teacher-scale`
+(default 0.5). The pipeline runs RL with `--teacher glm-5.3-flash`.
 
 ## Verifier and data
 
@@ -174,6 +175,51 @@ Previous databases and checkpoints are preserved. Template and curated-trace
 stores live inside the versioned data directory; earlier approvals are not loaded
 into a new verifier automatically. Run directories cannot be reused.
 
+## Distillation
+
+`scripts/collect_solutions.py` asks the teacher to solve every trainable template for
+`--per-template` parameter choices and keeps a solution only when its submission
+matches the reference on all four training fixtures. Held-out templates are never
+included. `solutions_v2.jsonl` holds 884 verified solutions; the first 787
+(`solutions_v2.before_seeds.jsonl`) predate the Spider-seeded templates.
+
+`sft.py` trains on those solutions in the student's token format:
+
+```sh
+python sft.py --name sft_1b --lora-layers 24 --solutions data/sql-v2.2/solutions_v2.jsonl --max-nll 100 --epochs 2 --max-tokens 384
+python sft.py --name sft_1b_2 --resume runs/rl_1b/step_00078 --solutions data/sql-v2.2/solutions_v2.jsonl --replay rl_1b --max-nll 1.5 --max-tokens 384
+```
+
+Without `--resume` it starts a fresh LoRA adapter on `--lora-layers` layers. `--max-nll`
+drops solutions the current policy finds unlikely; use a high value for a fresh adapter,
+which has not learned the protocol yet. `--replay` adds the student's own correct
+transcripts from earlier runs, `--replay-ratio` per teacher example, so it keeps what it
+already knew. Weights are averaged with `--ema-decay`. The run evaluates before and after
+training and writes `runs/<name>/sft_result.json`.
+
+## Pipeline
+
+`scripts/pipeline.sh <model-dir> <name> <rl-hours>` runs the same stages on any model,
+each in a new run directory:
+
+1. Score the released model on every split, including the test set.
+2. Distil from a fresh adapter on all layers.
+3. GRPO from that adapter with early stopping, up to `<rl-hours>`.
+4. Distil again on the solutions plus the RL run's correct transcripts.
+5. Keep whichever of steps 3 and 4 scores higher on the selection set, score it on every
+   split, and write `runs/<name>_results/report.md`.
+
+```sh
+FIRST_SOLUTIONS=data/sql-v2.2/solutions_v2.before_seeds.jsonl TEMPLATES_BEFORE=1792963417 \
+    scripts/pipeline.sh ../models/MiniCPM5-1B p1b 6
+```
+
+`FIRST_SOLUTIONS` and `TEMPLATES_BEFORE` (Unix time) repeat an earlier run's inputs: the
+first distillation's solution file and the generated templates RL starts from. The
+command above reproduces the reported 1B run; the 2B run used `../models/MiniCPM5-2B p2b 6`.
+`scripts/report.py` compares two evaluation files with 95% intervals, and
+`scripts/results_chart.py` draws `docs/results-*.svg` from the reports in `engineering/`.
+
 ## Training settings
 
 A training step samples 16 questions with 8 attempts each. The default learning
@@ -245,6 +291,19 @@ The watchdog sends SIGTERM after three checks in a row over its footprint limit 
 graded correct, if evaluation falls 0.15 below both the first and best results
 twice in a row, or if the status file stops changing for 45 minutes. It records an
 alert when the selection score falls 0.15 below its best.
+
+## Export and local testing
+
+```sh
+scripts/export_gguf.sh ../models/MiniCPM5-1B runs/p1b_sft2/final MiniCPM5-1B-SQL <llama.cpp checkout>
+llama-server -m ../release/MiniCPM5-1B-SQL-Q8_0.gguf --jinja -c 4096 --port 8091 &
+python scripts/gguf_prompts.py 8091 Q8_0
+```
+
+The export fuses the adapter and writes BF16, Q8_0 and Q4_K_M GGUFs to `release/`, with
+no-think as the chat template default. `gguf_prompts.py` runs the ten prompts from
+`docs/lmstudio-prompts.txt` at temperature 0, runs each `run_sql` on `eval.db`, and checks
+the submitted result. See `docs/lmstudio.md` for LM Studio.
 
 ## Checks and inspection
 
