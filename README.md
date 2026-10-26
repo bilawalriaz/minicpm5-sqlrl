@@ -5,7 +5,7 @@ a verified teacher, and an adaptive SQL curriculum. The local dashboard shows
 training metrics and rollout transcripts.
 
 Results so far are in [WRITEUP.md](WRITEUP.md), and the blog post is
-[Teaching a 1B model to be a SQL agent on a MacBook](https://bilawal.net/blog/minicpm5-1b-sql-agent/). See [sqlrl/README.md](sqlrl/README.md) for setup, the answer protocol, verification,
+[Teaching MiniCPM5 1B and 2B to be SQL agents on a MacBook](https://bilawal.net/blog/minicpm5-1b-sql-agent/). See [sqlrl/README.md](sqlrl/README.md) for setup, the answer protocol, verification,
 evaluation, and training commands.
 
 Source code, tests, dependency versions, and engineering results are tracked here.

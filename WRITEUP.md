@@ -116,9 +116,9 @@ Each stage helped the 2B. Scores here are from the in-run evaluations (8 attempt
 | After 23 steps of GRPO (six hours) | 75.0% | 95-98% | 96.9% |
 | After the second distillation | 75.7% | 96.5% | 95.3% |
 
-Distillation did most of the work. The 2B already follows the tool protocol, so the teacher solutions only had to teach SQL patterns, and they lifted every split in about an hour. RL then added nine points on the selection set. The second distillation pass was level with RL, and the pipeline kept it because its selection score was higher by one attempt.
+Distillation did most of the work. The 2B already follows the tool protocol, so the teacher solutions only had to teach SQL patterns, and they lifted every split in about an hour and a half. RL then added nine points on the selection set. The second distillation pass was level with RL, and the pipeline kept it because its selection score was higher by one attempt.
 
-On the final scoring, 1,223 of the fine-tuned 2B's 1,472 attempts were correct, 212 were wrong SQL and 37 ran out of turns; none ended without a submission. The hardest test types are still hard: the share of returned orders in a category (5%), the busiest month of a year (27%) and lines per order by status (27%).
+On the final scoring, 1,223 of the fine-tuned 2B's 1,472 attempts were correct, 212 were wrong SQL and 37 ran out of turns; none ended without a submission. The hardest types are still hard: the share of returned orders in a category (5%), the busiest month of a year (27%) and lines per order by status (27%). Counting groups that pass a `HAVING` filter, where the fine-tuned 1B managed 10-19%, reached 69-77% on the 2B.
 
 Two differences between the runs matter when comparing them. The 1B's final checkpoint came from the development runs, with far more RL than the 2B's six hours. And the 2B's second distillation included 97 solutions for templates generated from real Spider train questions, added after the 1B was finished. Running the 1B through the same pipeline would make the comparison exact.
 
