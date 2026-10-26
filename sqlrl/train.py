@@ -393,6 +393,7 @@ def main():
                     help="every N steps, generate new templates for the weakest skills (0 disables)")
     ap.add_argument("--evolve-skills", type=int, default=2, help="skills to target each time: weakest first, then fewest templates")
     ap.add_argument("--evolve-n", type=int, default=3, help="templates proposed per skill")
+    ap.add_argument("--templates-before", type=float, help="load only generated templates created before this Unix time")
     ap.add_argument("--evolve-model", default="claude-haiku-5-5,glm-5.3,glm-5.3-flash",
                     help="comma-separated proposers, rotated across skills")
     ap.add_argument("--evolve-solver", default="glm-5.3-flash", help="model that must solve proposals without the reference")
@@ -486,7 +487,7 @@ def main():
     tiers = tuple(int(t) for t in args.tiers.split(","))
     teacher = Teacher(args.teacher, max_turns=args.max_turns, effort=args.teacher_effort,
                       show_schema=not args.hide_schema) if args.teacher else None
-    generated = evolve.load_accepted()
+    generated = evolve.load_accepted(args.templates_before)
     print(f"templates: {len(env.BUILTIN)} built in, {len(generated)} generated earlier")
     curriculum = Curriculum(hard_bonus=0.1 if teacher else 0.0)
     # A warm start also inherits solve rates, so replay of mastered templates starts at step 1.

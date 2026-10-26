@@ -499,10 +499,12 @@ def uncovered_combinations(k, seed=None):
     return out[:k]
 
 
-def load_accepted():
-    """Register every accepted template with env. Returns their names."""
+def load_accepted(before=None):
+    """Register accepted templates with env, optionally only those created before a Unix time,
+    so a later run can start from the same pool as an earlier one. Returns their names."""
     con = connect()
-    rows = con.execute("SELECT name, tier, skills, question, sql, params FROM templates WHERE status='accepted'").fetchall()
+    rows = con.execute("SELECT name, tier, skills, question, sql, params FROM templates WHERE status='accepted'"
+                       " AND created_at < ?", (before or float("inf"),)).fetchall()
     con.close()
     names = []
     for name, tier, skills, question, sql, params in rows:

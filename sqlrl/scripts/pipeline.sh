@@ -16,6 +16,10 @@ PY=/Library/Frameworks/Python.framework/Versions/3.13/bin/python3
 cd "$(dirname "$0")/.."
 out=runs/${name}_results
 solutions=data/sql-v2.2/solutions_v2.jsonl
+# Optional, to repeat an earlier run's inputs: the first distillation's solutions and the
+# generated-template pool the RL stage starts from (Unix time).
+first_solutions=${FIRST_SOLUTIONS:-$solutions}
+templates_before=${TEMPLATES_BEFORE:+--templates-before $TEMPLATES_BEFORE}
 exclude=(avg_order_value_country)  # engineering/test-set-exclusions.txt
 layers=$($PY -c "import json; print(json.load(open('$model/config.json'))['num_hidden_layers'])")
 mkdir -p $out
@@ -23,13 +27,13 @@ echo "$(date '+%F %T') stage 1: released model evaluation" >> $out/progress.log
 $PY -u evaluate.py --model $model --sets train,select,check,test --k 16 --max-tokens 384 --out $out/released.jsonl > $out/released.log 2>&1
 
 echo "$(date '+%F %T') stage 2: distillation from a fresh adapter ($layers layers)" >> $out/progress.log
-$PY -u sft.py --name ${name}_sft --model $model --lora-layers $layers --solutions $solutions --max-nll 100 \
+$PY -u sft.py --name ${name}_sft --model $model --lora-layers $layers --solutions $first_solutions --max-nll 100 \
     --epochs 2 --max-tokens 384 > runs/${name}_sft.log 2>&1
 
 echo "$(date '+%F %T') stage 3: GRPO for up to $hours hours" >> $out/progress.log
 $PY -u train.py --name ${name}_rl --model $model --resume runs/${name}_sft/final --steps 2000 --max-hours $hours \
     --prompts 32 --gen-batch 128 --max-tokens 384 --lr 1.5e-5 --lr-end 5e-6 --eval-every 10 --patience 6 \
-    --teacher glm-5.3-flash --seed 41 > runs/${name}_rl.log 2>&1 &
+    --teacher glm-5.3-flash --seed 41 ${=templates_before} > runs/${name}_rl.log 2>&1 &
 pid=$!
 caffeinate -i -s -m -w $pid &
 zsh scripts/watchdog.sh $pid runs/${name}_rl.mem 33792 3072 &
