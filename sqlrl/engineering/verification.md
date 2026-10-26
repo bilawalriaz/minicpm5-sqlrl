@@ -474,3 +474,26 @@ parameters 0.125 -> 0.941, attempt-weighted 0.074 -> 0.622. Outcomes: 915 correc
 wrong, 30 out of turns. The released 1B scored 0.036 on the test set in the earlier
 scoring and 0.030 here (sampling). The pipeline 1B is ahead of the development-run 1B
 (sft_1b_v1) on every held-out split; it replaces it as the reported fine-tuned 1B.
+
+## 1B GGUF export from the pipeline checkpoint
+
+`scripts/export_gguf.sh ../models/MiniCPM5-1B runs/p1b_sft2/final MiniCPM5-1B-SQL <llama.cpp 5266f24>`,
+26 October 2026 (`runs/p1b_export.log`). Q8_0 1,153,529,344 bytes, Q4_K_M 688,066,048 bytes.
+The embedded template has the no-think default and `add_bos_token` false. The development-run
+export moved to `release/MiniCPM5-1B-SQL-devrun` and `MiniCPM5-1B-SQL-devrun-GGUF` in LM Studio.
+
+Ten LM Studio prompts (`docs/lmstudio-prompts.txt`) through `llama-server --jinja` with `scripts/gguf_prompts.py`, temperature 0,
+384 tokens per turn, up to 5 turns, `run_sql` executed on `eval.db`, submitted result compared
+with the expected answer. llama-server sets `enable_thinking` true unless told otherwise, so the
+requests pass `chat_template_kwargs: {enable_thinking: false}`; without it the model thinks and
+runs out of tokens.
+
+| Build | Correct | Failed |
+| --- | --- | --- |
+| Pipeline 1B Q8_0 | 8/10 | 6 (spent over 2000, returned 1), 7 (busiest month, returned 08) |
+| Pipeline 1B Q4_K_M | 6/10 | 5 (Marseille), 6 (830), 7 (no submit in 5 turns), 9 (18) |
+| Development-run 1B Q8_0 | 8/10 | 6 (SQL error), 7 (SQL error) |
+
+The failures on 6 and 7 match their evaluation rates (50% and 0%). The prompt file's rates are
+now per-question rates from the final evaluations; question 2 changed from Berlin, which was not
+evaluated, to Osaka, which was.

@@ -4,10 +4,13 @@ Models (already in LM Studio under `bilawalriaz/`):
 
 - `MiniCPM5-1B-SQL-GGUF/MiniCPM5-1B-SQL-Q8_0.gguf`: fine-tuned, 8-bit, 1.15 GB
 - `MiniCPM5-1B-SQL-GGUF/MiniCPM5-1B-SQL-Q4_K_M.gguf`: fine-tuned, 4-bit, 0.69 GB
+- `MiniCPM5-1B-SQL-devrun-GGUF/`: the earlier development-run 1B, kept for comparison
 - `MiniCPM5-1B-released-GGUF/MiniCPM5-1B-released-Q8_0.gguf`: OpenBMB's released 1B, for comparison
 - `MiniCPM5-2B-SQL-GGUF/MiniCPM5-2B-SQL-Q8_0.gguf`: fine-tuned 2B, 8-bit, 2.68 GB
 - `MiniCPM5-2B-SQL-GGUF/MiniCPM5-2B-SQL-Q4_K_M.gguf`: fine-tuned 2B, 4-bit, 1.56 GB
 - `MiniCPM5-2B-released-GGUF/MiniCPM5-2B-released-Q8_0.gguf`: OpenBMB's released 2B with the same no-think template
+
+Use the 1B at Q8_0. At temperature 0 it got 8 of the 10 example prompts right in llama.cpp, against 6 for Q4_K_M.
 
 All builds default to no-think mode, which is how the models were trained and evaluated. Both models use the same system prompt and settings.
 
@@ -43,6 +46,10 @@ Don't enable LM Studio's tool use. The model writes its own calls in the MiniCPM
 Most of the time the fine-tuned model checks once with `run_sql` and then submits the same query, so
 the first query already tells you whether it got the question right.
 
-The percentages in `lmstudio-prompts.txt` are each fine-tuned model's success rates over 16 sampled attempts
-in the evaluation. Questions 1-7 are from the test set and 8-9 from the check set; the model never
+The percentages in `lmstudio-prompts.txt` are each fine-tuned model's success rate on that exact question
+over 16 sampled attempts in its final evaluation (`runs/p1b_results` and `runs/p2b_results`). Questions 1-7 are from the test set and 8-9 from the check set; the model never
 trained on those question types. Question 10 is a trained type with values it never saw.
+
+To run the prompts outside LM Studio with `llama-server --jinja`, send
+`"chat_template_kwargs": {"enable_thinking": false}` with each request. llama-server turns thinking on
+by default, and the model then runs out of tokens before it calls a tool.
