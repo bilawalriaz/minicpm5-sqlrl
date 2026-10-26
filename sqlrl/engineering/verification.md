@@ -403,3 +403,27 @@ proposal as examples of phrasing and query shape; templates are written for the 
 schema and pass the usual checks (four fixtures, solver, Haiku review, held-out
 containment). Their verified solutions are appended to `solutions_v2.jsonl` before the
 2B pipeline's second distillation stage reads it; the running RL stage is unchanged.
+
+## MiniCPM5-2B pipeline (p2b)
+
+`scripts/pipeline.sh ../models/MiniCPM5-2B p2b 6`, 25-26 October 2026, 19:20 to 06:19.
+Stages and in-run scores (selection / check / reserved parameters):
+
+| Stage | Run | Selection | Check | Reserved |
+| --- | --- | --- | --- | --- |
+| Released | p2b_sft (before) | 0.520 | 0.750 | 0.641 |
+| Distillation, fresh adapter, 42 layers, 787 solutions, 50 updates | p2b_sft | 0.664 | 0.924 | 0.953 |
+| GRPO, 23 steps in 6 h (time limit), selected step 23 | p2b_rl | 0.750 | 0.951-0.979 | 0.969 |
+| Distillation, 884 solutions + 579 replayed answers, 92 updates | p2b_sft2 | 0.757 | 0.965 | 0.953 |
+
+The second distillation's selection score was higher (0.757 against 0.750), so the
+pipeline scored p2b_sft2/final. Final scoring (`release-2b-report.md`, 16 attempts,
+384 tokens per turn, test exclusion as recorded): test 0.383 -> 0.731, check
+0.736 -> 0.962, selection 0.474 -> 0.760, reserved parameters 0.695 -> 0.988,
+attempt-weighted 0.525 -> 0.831. Outcomes: 1,223 correct, 212 wrong, 37 out of turns.
+
+RL steps took 10-36 minutes; steps 2-3 slowed while template generation and solution
+collection ran beside training (rollout 1,742 s at 28 tokens/s against 299 s at 172
+tokens/s once they finished). Swap counters showed about 184 GB written since boot,
+from overlapping jobs and a 7.5 GB `asitop` process earlier in the day; none during the
+measured quiet period.
